@@ -16,9 +16,9 @@ Phone / PC browser ──► GitHub Pages (this repo) ──► Apps Script web 
 | **Daily** | Cash in / cash out / transfers for one day, opening and closing balance, closing balance by account (Cash in hand, Bank, bKash). Print gives the same layout as the old paper ledger. |
 | **Monthly** | Totals for the month, expenses and income by category (click a category to see every entry), day-by-day closing, month-end balance per account, CSV download. |
 | **Inventory** | Parts and consumables with stock level, low-stock warnings, stock in / out / adjust, history. Stock bought or sold can be recorded in the cash book at the same time. |
-| **Salary → Attendance** | Monthly grid of employees × days. Tap a day: P present, A absent, H half day, L paid leave, O off. Weekly off days fill in automatically. |
+| **Salary → Attendance** | Monthly grid of employees × days. Tap a day: P present, A absent, L paid leave, O off/holiday. Weekly off days fill in automatically. |
 | **Salary → Salary sheet** | Basic, present/absent days, absence deduction (worked out automatically), advance, net payable, paid, due. Advances and salary payments are recorded in the cash book too. Printable. |
-| **Salary → Employees** | Add, edit or remove staff. Untick "track attendance" for investors or anyone paid a fixed amount. |
+| **Salary → Employees** | Add, edit or remove staff. Untick "track attendance" for heads of department, investors, or anyone paid a fixed amount. |
 | **Settings** | Starting balances, payment methods, categories, business details. |
 
 There is one **Transactions** tab instead of one tab per day. Each day's opening balance is worked out
@@ -55,10 +55,11 @@ Please don't rename these tabs or their header row. You can read them and filter
    in the description, e.g. `LUNCH (FOOD)` → Food. Your old tabs are not changed, and running it again replaces the earlier import.
 4. *(Optional)* **M&M App → 4. Import employees from a salary sheet**: paste the salary sheet's link and the month.
    Employees (name, designation, basic salary) are added or updated, and the "Advance Salary Taken" amounts are
-   recorded as advances for that month. Designations containing "Invest" are set to not track attendance.
+   recorded as advances for that month. Designations containing "Invest" or "Head of" are set to no absence deduction.
 
-**How the absence deduction works:** one day's pay = basic ÷ 30 (or ÷ days in the month, set in Settings).
-Each **A** deducts one day, each **H** half a day. **L** (paid leave), **O** (off) and unmarked working days are not deducted.
+**How the absence deduction works:** one day's pay = basic ÷ 26 (Friday is the only weekly off).
+Each **A** deducts one day. **L** (paid leave), **O** (off/holiday) and unmarked working days are not deducted.
+Heads of department and investors (attendance not tracked) are never deducted.
 Days before an employee's joining date are deducted. Days after today aren't counted until they happen.
 
 ### 3. Publish the script as a web app

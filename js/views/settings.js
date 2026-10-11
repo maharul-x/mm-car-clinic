@@ -32,14 +32,8 @@ export function renderSettings(view) {
 
       <form class="panel form" id="salary-rules" novalidate>
         <h2>Salary rules</h2>
-        <p class="muted">How absent days are deducted on the salary sheet.</p>
+        <p class="muted">Each absent day deducts basic salary ÷ 26. Paid leave and the weekly off day are never deducted.</p>
         <div class="grid2">
-          <label>One day's pay is basic salary ÷
-            <select name="salaryBasis">
-              <option value="30" ${s.salaryBasis === 'month' ? '' : 'selected'}>30 (every month)</option>
-              <option value="month" ${s.salaryBasis === 'month' ? 'selected' : ''}>Number of days in that month</option>
-            </select>
-          </label>
           <label>Weekly off day
             <select name="weeklyOff">
               ${['', 'Fri', 'Sat', 'Sun', 'Fri,Sat'].map(d => `<option value="${d}" ${String(s.weeklyOff || '') === d ? 'selected' : ''}>${d ? d.replace(',', ' + ') : 'None'}</option>`).join('')}

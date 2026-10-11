@@ -1,6 +1,6 @@
 import { call } from '../api.js';
 import { categories, methodLabel, methods } from '../state.js';
-import { esc, formError, openModal, options, submitting, toast } from '../util.js';
+import { confirmDialog, esc, formError, openModal, options, submitting, taka, toast } from '../util.js';
 
 const TITLES = { IN: 'Cash in', OUT: 'Cash out', TRANSFER: 'Move money between accounts' };
 
@@ -47,13 +47,21 @@ export function openTxnForm({ type, date, txn, onSaved }) {
         <label>Note (optional)<textarea name="note" rows="2" maxlength="300">${esc(t.note || '')}</textarea></label>
         <p class="form-error" hidden></p>
         <div class="actions">
-          ${editing ? '' : '<button type="submit" class="btn" data-again>Save &amp; add another</button>'}
+          ${editing ? '<button type="button" class="btn danger ghost" data-delete>Delete</button><span class="spacer"></span>' : '<button type="submit" class="btn" data-again>Save &amp; add another</button>'}
           <button type="submit" class="btn primary">Save</button>
         </div>
       </form>`,
   });
 
   const form = m.el.querySelector('form');
+  form.querySelector('[data-delete]')?.addEventListener('click', async () => {
+    if (!(await confirmDialog(`Delete "${t.description}" (${taka(t.amount)})? This cannot be undone.`))) return;
+    const ok = await submitting(form, () => call('deleteTxn', { id: t.id }));
+    if (!ok) return;
+    toast('Entry deleted');
+    m.close();
+    onSaved?.();
+  });
   form.addEventListener('submit', async e => {
     e.preventDefault();
     const again = !!e.submitter?.hasAttribute('data-again');

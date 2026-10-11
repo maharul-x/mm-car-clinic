@@ -1,6 +1,6 @@
 import { call } from '../api.js';
 import { methodLabel, methods, settings } from '../state.js';
-import { addDays, applyTxn, confirmDialog, esc, fmt, isISO, loading, prettyDate, sum, taka, toast, todayISO } from '../util.js';
+import { addDays, applyTxn, esc, fmt, isISO, loading, prettyDate, sum, taka, todayISO } from '../util.js';
 import { openTxnForm } from './txnForm.js';
 
 export async function renderDay(view, arg) {
@@ -77,12 +77,11 @@ export async function renderDay(view, arg) {
         <div class="panel">
           <h2>Transfers between accounts</h2>
           <div class="table-wrap"><table class="table">
-            <thead><tr><th>From</th><th>To</th><th>Note</th><th class="num">Amount</th><th class="no-print"><span class="sr">Actions</span></th></tr></thead>
+            <thead><tr><th>From</th><th>To</th><th>Note</th><th class="num">Amount</th></tr></thead>
             <tbody>${transfers.map(t => `
-              <tr>
+              <tr class="clickable" data-edit="${esc(t.id)}" tabindex="0" title="Open to edit or delete">
                 <td>${esc(methodLabel(t.method))}</td><td>${esc(methodLabel(t.toMethod))}</td>
                 <td>${esc(t.note || t.description)}</td><td class="num">${fmt(t.amount)}</td>
-                ${rowActions(t)}
               </tr>`).join('')}</tbody>
           </table></div>
         </div>` : ''}
@@ -117,21 +116,16 @@ export async function renderDay(view, arg) {
   view.querySelectorAll('[data-add]').forEach(b => {
     b.onclick = () => openTxnForm({ type: b.dataset.add, date, onSaved: refresh });
   });
-  view.onclick = async e => {
-    const edit = e.target.closest('[data-edit]');
-    const del = e.target.closest('[data-del]');
-    if (edit) openTxnForm({ txn: byId.get(edit.dataset.edit), onSaved: refresh });
-    if (del) {
-      const t = byId.get(del.dataset.del);
-      const ok = await confirmDialog(`Delete "${t.description}" (${taka(t.amount)})? This cannot be undone.`);
-      if (!ok) return;
-      try {
-        await call('deleteTxn', { id: t.id });
-        toast('Entry deleted');
-        refresh();
-      } catch (err) {
-        toast(err.message, 'error');
-      }
+  const open = row => openTxnForm({ txn: byId.get(row.dataset.edit), onSaved: refresh });
+  view.onclick = e => {
+    const row = e.target.closest('[data-edit]');
+    if (row) open(row);
+  };
+  view.onkeydown = e => {
+    const row = e.target.closest('[data-edit]');
+    if (row && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault();
+      open(row);
     }
   };
 }
@@ -140,33 +134,25 @@ function card(label, value, kind = '', sub = '') {
   return `<div class="card ${kind}"><span>${label}</span><strong>${taka(value)}</strong>${sub ? `<small>${esc(sub)}</small>` : ''}</div>`;
 }
 
-function rowActions(t) {
-  return `<td class="row-actions no-print">
-    <button class="link" data-edit="${esc(t.id)}">Edit</button>
-    <button class="link danger" data-del="${esc(t.id)}">Delete</button>
-  </td>`;
-}
-
 function ledgerTable(title, rows, total, kind) {
   return `
     <div class="panel ${kind}">
       <h2>${title}</h2>
       ${rows.length ? `
         <div class="table-wrap"><table class="table">
-          <thead><tr><th>SL</th><th>Inv. no.</th><th>Description</th><th>Method</th><th class="num">Amount (৳)</th><th class="no-print"><span class="sr">Actions</span></th></tr></thead>
+          <thead><tr><th>SL</th><th>Inv. no.</th><th>Description</th><th>Method</th><th class="num">Amount (৳)</th></tr></thead>
           <tbody>${rows.map((t, i) => `
-            <tr>
+            <tr class="clickable" data-edit="${esc(t.id)}" tabindex="0" title="Open to edit or delete">
               <td>${i + 1}</td>
               <td class="nowrap">${esc(t.invoice)}</td>
               <td>${esc(t.description)}
                 <span class="chip${t.category === 'Uncategorized' ? ' warn' : ''}">${esc(t.category)}</span>
                 ${t.note ? `<small class="note">${esc(t.note)}</small>` : ''}
               </td>
-              <td>${esc(methodLabel(t.method))}</td>
+              <td class="nowrap">${esc(t.method === 'Bkash' ? 'bKash' : t.method)}</td>
               <td class="num">${fmt(t.amount)}</td>
-              ${rowActions(t)}
             </tr>`).join('')}</tbody>
-          <tfoot><tr><td colspan="4">Total</td><td class="num">${fmt(total)}</td><td class="no-print"></td></tr></tfoot>
+          <tfoot><tr><td colspan="4">Total</td><td class="num">${fmt(total)}</td></tr></tfoot>
         </table></div>`
       : `<p class="empty">No ${title.toLowerCase()} entries for this day.</p>`}
     </div>`;

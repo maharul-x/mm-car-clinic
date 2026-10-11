@@ -8,11 +8,12 @@ import {
 const STATUS = {
   P: { label: 'Present', short: 'P' },
   A: { label: 'Absent', short: 'A' },
-  H: { label: 'Half day', short: 'H' },
   L: { label: 'Paid leave', short: 'L' },
   O: { label: 'Off / holiday', short: 'O' },
 };
-const CYCLE = ['', 'P', 'A', 'H', 'L', 'O'];
+const CYCLE = ['', 'P', 'A', 'L', 'O'];
+// One day's pay = basic ÷ 26 (a month has about 26 working days; Friday is the weekly off).
+const WORKING_DAYS = 26;
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const TABS = [['attendance', 'Attendance'], ['sheet', 'Salary sheet'], ['employees', 'Employees']];
 
@@ -60,30 +61,29 @@ function offDays() {
 
 /**
  * Works out each employee's salary for the month.
- * Unmarked working days count as present; only A (full day) and H (half day) are deducted.
+ * Unmarked working days count as present; only A (absent) days are deducted, at basic ÷ 26 each.
  * Days before the joining date are deducted too. Future days are not counted yet.
  */
 function payroll(month, data, statusOf) {
   const days = monthDays(month);
   const off = offDays();
   const today = todayISO();
-  const divisor = settings().salaryBasis === 'month' ? days.length : 30;
   return data.employees
     .filter(e => e.active || data.attendance.some(a => a.employeeId === e.id) || data.payments.some(p => p.employeeId === e.id))
     .map(e => {
-      const c = { P: 0, A: 0, H: 0, L: 0, O: 0, unmarked: 0, beforeJoin: 0 };
+      const c = { P: 0, A: 0, L: 0, O: 0, unmarked: 0, beforeJoin: 0 };
       if (e.trackAttendance) {
         days.forEach(d => {
           if (d > today) return;
           if (e.joinDate && d < e.joinDate) { c.beforeJoin++; return; }
           const s = statusOf(e.id, d) || (off.has(parseISO(d).getDay()) ? 'O' : '');
-          if (s) c[s]++;
+          if (c[s] !== undefined) c[s]++;
           else c.unmarked++;
         });
       }
       const pays = data.payments.filter(p => p.employeeId === e.id);
-      const dailyRate = e.basicSalary / divisor;
-      const deduction = e.trackAttendance ? Math.round(dailyRate * (c.A + c.beforeJoin + c.H / 2)) : 0;
+      const dailyRate = e.basicSalary / WORKING_DAYS;
+      const deduction = e.trackAttendance ? Math.round(dailyRate * (c.A + c.beforeJoin)) : 0;
       const advance = sum(pays.filter(p => p.type === 'ADVANCE').map(p => p.amount));
       const paid = sum(pays.filter(p => p.type === 'SALARY').map(p => p.amount));
       const net = e.basicSalary - advance - deduction;
@@ -131,13 +131,13 @@ function renderAttendance(view, month, data) {
                   const wd = parseISO(d).getDay();
                   return `<th class="${off.has(wd) ? 'off' : ''} ${d === today ? 'today' : ''}">${Number(d.slice(8))}<small>${WEEKDAYS[wd].slice(0, 2)}</small></th>`;
                 }).join('')}
-                <th class="sum">Present</th><th class="sum">Absent</th><th class="sum">Half</th><th class="sum">Leave</th><th class="sum">Deduction</th>
+                <th class="sum">Present</th><th class="sum">Absent</th><th class="sum">Leave</th><th class="sum">Deduction</th>
               </tr></thead>
               <tbody>${staff.map(e => `
                 <tr data-emp="${esc(e.id)}">
                   <th class="sticky" scope="row">${esc(e.name)}<small>${esc(e.designation)}</small></th>
                   ${days.map(d => `<td><button class="att" data-day="${d}" aria-label="${esc(e.name)}, ${esc(prettyDate(d, { day: 'numeric', month: 'short' }))}"></button></td>`).join('')}
-                  <td class="sum" data-k="present"></td><td class="sum" data-k="A"></td><td class="sum" data-k="H"></td><td class="sum" data-k="L"></td><td class="sum" data-k="ded"></td>
+                  <td class="sum" data-k="present"></td><td class="sum" data-k="A"></td><td class="sum" data-k="L"></td><td class="sum" data-k="ded"></td>
                 </tr>`).join('')}
               </tbody>
             </table>
@@ -165,7 +165,6 @@ function renderAttendance(view, month, data) {
       const r = rows.find(x => x.e.id === id);
       tr.querySelector('[data-k="present"]').textContent = r.present;
       tr.querySelector('[data-k="A"]').textContent = r.c.A || '';
-      tr.querySelector('[data-k="H"]').textContent = r.c.H || '';
       tr.querySelector('[data-k="L"]').textContent = r.c.L || '';
       tr.querySelector('[data-k="ded"]').textContent = r.deduction ? fmt(r.deduction) : '';
     });
@@ -179,6 +178,10 @@ function renderAttendance(view, month, data) {
     else pending.set(k, s);
   };
   draw();
+  // Start the grid scrolled so today's column is in view.
+  const wrap = view.querySelector('.att-wrap');
+  const todayCell = wrap?.querySelector('thead th.today');
+  if (todayCell) wrap.scrollLeft = Math.max(0, todayCell.offsetLeft - wrap.clientWidth / 2);
 
   view.onclick = e => {
     const b = e.target.closest('button[data-day]');
@@ -218,7 +221,6 @@ function renderSheet(view, month, data) {
   const rows = payroll(month, data, (id, d) => att.get(`${d}|${id}`) || '');
   const s = settings();
   const T = k => sum(rows.map(r => r[k]));
-  const basis = s.salaryBasis === 'month' ? 'the number of days in the month' : '30';
 
   view.innerHTML = `
     <section class="page salary">
@@ -273,7 +275,7 @@ function renderSheet(view, month, data) {
           </table></div>`
         : '<p class="empty">No employees yet. Add them under <a href="#/salary/employees">Employees</a>.</p>'}
       </div>
-      <p class="muted small">Deduction per absent day = basic salary ÷ ${basis}; a half day is half of that. Change this in <a href="#/settings">Settings</a>.
+      <p class="muted small">Deduction per absent day = basic salary ÷ 26. Paid leave, Fridays and unmarked days are not deducted. Employees set to “not tracked” (heads of department, investors) are never deducted.
         Net payable = basic − advance − deduction.</p>
       <div class="print-only signatures">
         <span>Prepared by: ${esc(s.preparedBy)}</span>
@@ -296,7 +298,6 @@ function renderSheet(view, month, data) {
 function absentLabel(c) {
   const parts = [];
   if (c.A) parts.push(`${c.A}`);
-  if (c.H) parts.push(`${c.H}×½`);
   if (c.beforeJoin) parts.push(`${c.beforeJoin} before joining`);
   return parts.join(' + ') || '0';
 }
@@ -447,7 +448,7 @@ function openEmployeeForm({ emp, onSaved }) {
           <label>Joining date (optional)<input name="joinDate" type="date" value="${esc(e.joinDate || '')}"></label>
         </div>
         <label class="check"><input type="checkbox" name="trackAttendance" ${e.trackAttendance ? 'checked' : ''}> Track attendance and deduct for absent days</label>
-        <p class="muted small">Untick for investors or anyone paid a fixed amount.</p>
+        <p class="muted small">Untick for heads of department, investors, or anyone paid a fixed amount.</p>
         <p class="form-error" hidden></p>
         <div class="actions">
           ${editing ? '<button type="button" class="btn danger ghost" data-remove>Remove employee</button>' : ''}

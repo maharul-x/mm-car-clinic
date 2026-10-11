@@ -26,7 +26,6 @@ const DEFAULT_SETTINGS = {
   preparedBy: '',
   methods: 'Cash,Bank,Bkash',
   startDate: '',
-  salaryBasis: '30',
   weeklyOff: 'Fri',
 };
 
@@ -37,9 +36,11 @@ const DEFAULT_CATEGORIES = {
 
 const TXN_TYPES = ['IN', 'OUT', 'TRANSFER'];
 const MOVE_TYPES = ['IN', 'OUT', 'ADJUST'];
-const ATT_STATUSES = ['P', 'A', 'H', 'L', 'O', ''];
+const ATT_STATUSES = ['P', 'A', 'L', 'O', ''];
 const PAY_TYPES = ['ADVANCE', 'SALARY'];
-const SETTING_KEYS = /^(businessName|address|phone|preparedBy|methods|startDate|salaryBasis|weeklyOff|opening_[A-Za-z0-9 ]+)$/;
+// Designations whose salary is never cut for absence.
+const NO_DEDUCTION = /invest|head\s+of/i;
+const SETTING_KEYS = /^(businessName|address|phone|preparedBy|methods|startDate|weeklyOff|opening_[A-Za-z0-9 ]+)$/;
 // Columns written as real dates; every other string is forced to plain text.
 const DATE_FIELDS = ['date', 'joinDate', 'createdAt', 'updatedAt'];
 
@@ -281,8 +282,6 @@ function saveSettings_(input) {
       if (v && !isDate_(v)) throw new Error('Invalid start date.');
     } else if (key.indexOf('opening_') === 0) {
       v = num_(v);
-    } else if (key === 'salaryBasis') {
-      v = String(v) === 'month' ? 'month' : '30';
     } else if (key === 'weeklyOff') {
       v = str_(v, 40);
     } else {
@@ -701,6 +700,7 @@ function importSalarySheet() {
   }
   const ok = ui.alert('Import salary sheet',
     'Found ' + people.length + ' employees. Employees with the same name are updated, others are added. ' +
+    'Heads of department and investors are set to no absence deduction. ' +
     'Advances are recorded for ' + month + ' (replacing any earlier import for that month) but not added to the cash book. Continue?',
     ui.ButtonSet.YES_NO);
   if (ok !== ui.Button.YES) return;
@@ -720,8 +720,8 @@ function importSalarySheet() {
         basicSalary: p.basicSalary,
         phone: old ? old.phone : '',
         joinDate: old ? old.joinDate : '',
-        // Investors draw a fixed amount and don't clock in.
-        trackAttendance: old ? old.trackAttendance : !/invest/i.test(p.designation),
+        // Investors and heads of department are paid in full regardless of attendance.
+        trackAttendance: old ? old.trackAttendance : !NO_DEDUCTION.test(p.designation),
         active: true,
       });
       if (p.advance > 0) {

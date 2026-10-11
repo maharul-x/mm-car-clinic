@@ -1,7 +1,7 @@
 // In-browser stand-in for the Apps Script server, used by "Try the demo".
 // Data lives in this browser only. The sample data is made up.
 
-const KEY = 'mm.demo.v3';
+const KEY = 'mm.demo.v5';
 let db = null;
 
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
@@ -27,6 +27,7 @@ function seed() {
     emp('Sample Painter', 'Paint', 18000),
     emp('Sample Helper', 'Asst. Engine Technician', 6000),
     emp('Sample Front Desk', 'CRE', 15000),
+    emp('Sample Head', 'Head Of Service', 15000, false),
     emp('Sample Investor', 'Investor', 15000, false),
   ];
   employees.forEach((e, i) => { e.sortOrder = i + 1; });
@@ -35,14 +36,13 @@ function seed() {
     employees,
     attendance: [
       att(employees[0], 1, 'P'), att(employees[1], 1, 'P'), att(employees[2], 1, 'A'), att(employees[3], 1, 'P'),
-      att(employees[0], 3, 'H'), att(employees[2], 5, 'A'), att(employees[1], 7, 'L'),
+      att(employees[0], 3, 'A'), att(employees[2], 5, 'A'), att(employees[1], 7, 'L'),
     ],
     payments: [
       { id: uid(), date: '2026-10-05', employeeId: employees[0].id, month: '2026-10', type: 'ADVANCE', amount: 2000, method: 'Cash', note: '', txnId: '', source: 'demo' },
       { id: uid(), date: '2026-10-08', employeeId: employees[2].id, month: '2026-10', type: 'ADVANCE', amount: 1000, method: 'Cash', note: '', txnId: '', source: 'demo' },
     ],
     settings: {
-      salaryBasis: '30',
       weeklyOff: 'Fri',
       businessName: 'M & M CAR CLINIC',
       address: 'BAIZID LINK ROAD, AREFIN NAGOR, NEAR SOUTHERN UNIVERSITY',
