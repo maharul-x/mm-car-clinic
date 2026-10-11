@@ -7,6 +7,7 @@ import { renderLogin } from './views/login.js';
 import { renderMonth } from './views/month.js';
 import { renderOverview } from './views/overview.js';
 import { installShortcuts, modKey, openCommandMenu } from './shortcuts.js';
+import { applyTheme, cycleTheme } from './theme.js';
 import { renderSalary } from './views/salary.js';
 import { renderSettings } from './views/settings.js';
 
@@ -84,6 +85,8 @@ window.addEventListener('hashchange', route);
 // Re-draw the current screen after a save made from a shortcut or the command menu.
 window.addEventListener('mm:refresh', route);
 installShortcuts();
+applyTheme();
+document.getElementById('theme-toggle').onclick = cycleTheme;
 document.getElementById('cmdk-open').onclick = openCommandMenu;
 document.getElementById('cmdk-mod').textContent = modKey();
 route();

@@ -2,6 +2,7 @@ import { call, clearSession, isDemo } from '../api.js';
 import { resetDemo } from '../mock.js';
 import { loadMeta, methodLabel, state } from '../state.js';
 import { confirmDialog, esc, formError, submitting, toast } from '../util.js';
+import { getTheme, setTheme, THEMES } from '../theme.js';
 
 export function renderSettings(view) {
   const s = state.meta.settings;
@@ -68,6 +69,14 @@ export function renderSettings(view) {
       </form>
 
       <div class="panel">
+        <h2>Appearance</h2>
+        <p class="muted">Saved on this device only.</p>
+        <div class="segmented" role="radiogroup" aria-label="Theme">
+          ${THEMES.map(([k, label]) => `<button type="button" role="radio" aria-checked="${getTheme() === k}" data-theme-pick="${k}">${label}</button>`).join('')}
+        </div>
+      </div>
+
+      <div class="panel">
         <h2>This device</h2>
         <p class="muted">${isDemo() ? 'You are using the demo. Changes are saved in this browser only.' : 'Connected to your Google Sheet.'}</p>
         <div class="actions start">
@@ -76,6 +85,13 @@ export function renderSettings(view) {
         </div>
       </div>
     </section>`;
+
+  view.querySelectorAll('[data-theme-pick]').forEach(b => {
+    b.onclick = () => {
+      setTheme(b.dataset.themePick);
+      view.querySelectorAll('[data-theme-pick]').forEach(x => x.setAttribute('aria-checked', String(x === b)));
+    };
+  });
 
   const balances = view.querySelector('#balances');
   balances.addEventListener('submit', async e => {

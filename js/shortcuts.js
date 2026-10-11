@@ -2,6 +2,7 @@ import { hasSession } from './api.js';
 import { state } from './state.js';
 import { esc, openModal, todayISO } from './util.js';
 import { openTxnForm } from './views/txnForm.js';
+import { setTheme } from './theme.js';
 
 const go = hash => () => { location.hash = hash; };
 const add = type => () => openTxnForm({ type, date: todayISO(), onSaved: () => window.dispatchEvent(new Event('mm:refresh')) });
@@ -20,6 +21,9 @@ export const SHORTCUTS = [
   { id: 'sheet', label: 'Go to Salary sheet', keys: ['G', 'S'], run: go('#/salary/sheet') },
   { id: 'employees', label: 'Go to Employees', keys: ['G', 'E'], run: go('#/salary/employees') },
   { id: 'settings', label: 'Go to Settings', keys: ['G', ','], run: go('#/settings') },
+  { id: 'theme-dark', label: 'Theme: Dark', keys: [], run: () => setTheme('dark') },
+  { id: 'theme-light', label: 'Theme: Light', keys: [], run: () => setTheme('light') },
+  { id: 'theme-system', label: 'Theme: Match device', keys: [], run: () => setTheme('system') },
 ];
 
 export const modKey = () => (/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl');
