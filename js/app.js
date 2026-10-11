@@ -5,10 +5,12 @@ import { renderDay } from './views/day.js';
 import { renderInventory } from './views/inventory.js';
 import { renderLogin } from './views/login.js';
 import { renderMonth } from './views/month.js';
+import { renderOverview } from './views/overview.js';
+import { installShortcuts, modKey, openCommandMenu } from './shortcuts.js';
 import { renderSalary } from './views/salary.js';
 import { renderSettings } from './views/settings.js';
 
-const ROUTES = { day: renderDay, month: renderMonth, inventory: renderInventory, salary: renderSalary, settings: renderSettings };
+const ROUTES = { overview: renderOverview, day: renderDay, month: renderMonth, inventory: renderInventory, salary: renderSalary, settings: renderSettings };
 
 const view = document.getElementById('view');
 const topbar = document.getElementById('topbar');
@@ -46,7 +48,7 @@ async function route() {
   topbar.hidden = false;
   document.body.classList.toggle('demo', isDemo());
 
-  const page = ROUTES[name] ? name : 'day';
+  const page = ROUTES[name] ? name : 'overview';
   topbar.querySelectorAll('[data-route]').forEach(a => {
     if (a.dataset.route === page) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
@@ -79,4 +81,9 @@ async function route() {
 }
 
 window.addEventListener('hashchange', route);
+// Re-draw the current screen after a save made from a shortcut or the command menu.
+window.addEventListener('mm:refresh', route);
+installShortcuts();
+document.getElementById('cmdk-open').onclick = openCommandMenu;
+document.getElementById('cmdk-mod').textContent = modKey();
 route();

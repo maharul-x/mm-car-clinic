@@ -1,12 +1,29 @@
 // In-browser stand-in for the Apps Script server, used by "Try the demo".
 // Data lives in this browser only. The sample data is made up.
 
-const KEY = 'mm.demo.v5';
+const KEY = 'mm.demo.v6';
 let db = null;
 
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
 const stamp = () => new Date().toISOString();
 const r2 = n => Math.round((Number(n) || 0) * 100) / 100;
+
+// A few made-up working days after 1 Oct so the Overview chart has something to show.
+function laterDays() {
+  const out = [];
+  for (let d = 2; d <= 11; d++) {
+    const date = `2026-10-${String(d).padStart(2, '0')}`;
+    if (new Date(2026, 9, d).getDay() === 5) continue; // Friday off
+    const k = (d * 37) % 11;
+    const row = (type, description, amount, method, category) =>
+      ({ id: uid(), date, type, invoice: type === 'IN' ? `INV-0010${String(d).padStart(2, '0')}` : '', description, category, amount, method, toMethod: '', note: '', source: 'demo', createdAt: `${date}T10:00:00` });
+    out.push(row('IN', `SAMPLE CUSTOMER ${String.fromCharCode(67 + d)}`, 4000 + k * 1500, k % 3 ? 'Cash' : 'Bank', 'Customer Payment'));
+    if (k % 2) out.push(row('IN', 'SAMPLE WALK-IN SERVICE', 1500 + k * 300, 'Bkash', 'Customer Payment'));
+    out.push(row('OUT', 'LUNCH (FOOD)', 550 + (k % 4) * 40, 'Cash', 'Food'));
+    if (k > 4) out.push(row('OUT', 'PARTS PURCHASE', 2500 + k * 600, 'Cash', 'Parts Purchase'));
+  }
+  return out;
+}
 
 function seed() {
   const date = '2026-10-01';
@@ -68,6 +85,7 @@ function seed() {
       t('OUT', '', 'LUNCH (FOOD)', 600, 'Cash', 'Food'),
       t('OUT', '', 'MECHANIC 1 ADVANCE (SALARY)', 1000, 'Cash', 'Salary'),
       t('OUT', '', 'HELPER DAILY (SALARY)', 300, 'Cash', 'Salary'),
+      ...laterDays(),
     ],
     items,
     moves: [

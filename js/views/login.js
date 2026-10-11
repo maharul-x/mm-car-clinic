@@ -41,6 +41,7 @@ export function renderLogin(view, onDone) {
     await submitting(form, async () => {
       await call('ping', {}, session);
       saveSession(session, !!v.remember);
+      location.hash = '#/overview';
       onDone();
     });
   });

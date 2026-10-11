@@ -3,25 +3,30 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#fbfbfc" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#09090b">
   <meta name="robots" content="noindex">
   <title>M&amp;M Car Clinic</title>
   <link rel="icon" type="image/png" href="assets/logo.png">
   <link rel="apple-touch-icon" href="assets/logo.png">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
   <aside class="sidebar no-print" id="topbar" hidden>
-    <a href="#/day" class="brand">
+    <a href="#/overview" class="brand">
       <img src="assets/logo.png" alt="" width="28" height="28">
       <span>M&amp;M Car Clinic</span>
       <span class="demo-badge">Demo</span>
     </a>
+    <button type="button" class="cmdk-open" id="cmdk-open">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg>
+      <span>Search or jump to…</span>
+      <span class="keys"><kbd id="cmdk-mod">Ctrl</kbd><kbd>K</kbd></span>
+    </button>
     <nav aria-label="Main">
+      <a href="#/overview" data-route="overview">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="5" height="5" rx="1"/><rect x="8.5" y="2.5" width="5" height="3" rx="1"/><rect x="8.5" y="7.5" width="5" height="6" rx="1"/><rect x="2.5" y="9.5" width="5" height="4" rx="1"/></svg>
+        <span>Overview</span>
+      </a>
       <a href="#/day" data-route="day">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.5h8.5a1.5 1.5 0 0 1 1.5 1.5v9.5H4.5A1.5 1.5 0 0 1 3 12V2.5Z"/><path d="M3 12a1.5 1.5 0 0 1 1.5-1.5H13M6 5.5h4"/></svg>
         <span>Daily</span>
