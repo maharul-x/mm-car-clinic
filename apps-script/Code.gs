@@ -33,7 +33,7 @@ const DEFAULT_SETTINGS = {
 
 const DEFAULT_CATEGORIES = {
   IN: ['Customer Payment', 'Other Income'],
-  OUT: ['Food', 'Salary', 'Workshop', 'Parts Purchase', 'Commission', 'Utility', 'Rent', 'Transport', 'Other'],
+  OUT: ['Food', 'Salary', 'Workshop', 'Parts Purchase', 'Commission', 'Utility', 'Invoice', 'Rent', 'Transport', 'Other'],
 };
 
 const TXN_TYPES = ['IN', 'OUT', 'TRANSFER'];
@@ -1406,7 +1406,7 @@ function planLegacyImport_(tabs, s, catsIn) {
     });
     day.forEach((e, i) => {
       if (done[i]) return;
-      txns.push(legacyTxn_(d, Object.assign({}, e, { toMethod: '', category: legacyCategory_(e.desc, e.type, cats) }), now));
+      txns.push(legacyTxn_(d, Object.assign({}, e, { toMethod: '', category: legacyCategory_(e.desc, e.type, cats, e.invoice) }), now));
     });
     if (day.length) usedDays[d.date] = true;
   });
@@ -1430,9 +1430,10 @@ function legacyTxn_(d, e, now) {
 /**
  * Category from an old description. Looks at every "(…)" in it, e.g. "MOBILE RECHARGE (UTILITY) - STAFF",
  * tolerating small typos ("(WORSHOP)", "(WORKSHOPO)"). New single-word labels become new categories.
+ * Cash out with no category but an invoice number goes under "Invoice" (parts and work bought for a job).
  * `cats` is updated in place when a new category is created.
  */
-function legacyCategory_(desc, type, cats) {
+function legacyCategory_(desc, type, cats, invoice) {
   const list = cats[type];
   const norm = x => String(x).toUpperCase().replace(/[^A-Z]/g, '');
   const groups = (String(desc).match(/\(([^()]*)\)/g) || []).map(g => g.slice(1, -1).trim());
@@ -1457,6 +1458,10 @@ function legacyCategory_(desc, type, cats) {
     if (/COMMIS/.test(d) && pick('Commission')) return pick('Commission');
     if (/\b(LUNCH|NASTA|TEA|COFFE+|BISCUIT|SNACKS?)\b/.test(d) && pick('Food')) return pick('Food');
     if (/\bDAY WORK\b/.test(d) && pick('Salary')) return pick('Salary');
+    if (String(invoice || '').trim()) {
+      if (!pick('Invoice')) list.push('Invoice');
+      return pick('Invoice');
+    }
     return 'Uncategorized';
   }
   return list.indexOf('Customer Payment') >= 0 ? 'Customer Payment' : list[0];
