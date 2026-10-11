@@ -1456,17 +1456,10 @@ function legacyCategory_(desc, type, cats, invoice) {
     const d = String(desc).toUpperCase();
     const pick = name => list.find(c => c.toLowerCase() === name.toLowerCase());
     if (/COMMIS/.test(d) && pick('Commission')) return pick('Commission');
-    if (/\b(LUNCH|NASTA|TEA|COFFE+|BISCUIT|SNACKS?)\b/.test(d) && pick('Food')) return pick('Food');
-    if (/\bDAY WORK\b/.test(d) && pick('Salary')) return pick('Salary');
-    const ensure = name => {
-      if (!pick(name)) list.push(name);
-      return pick(name);
-    };
-    if (String(invoice || '').trim()) return ensure('Invoice');
-    // House rules for the old sheets (entries without an invoice number):
-    if (/\bTISSUE\b|\bTAX\b/.test(d)) return ensure('Workshop');
-    if (/\bDUE PAYMENT\b/.test(d)) return ensure('Vendor Payment');
-    if (/^\s*[A-Z]{3,}\s*$/.test(d)) return ensure('Salary'); // just a person's name = paid to staff
+    if (String(invoice || '').trim()) {
+      if (!pick('Invoice')) list.push('Invoice');
+      return pick('Invoice');
+    }
     return 'Uncategorized';
   }
   return list.indexOf('Customer Payment') >= 0 ? 'Customer Payment' : list[0];
