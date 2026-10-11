@@ -1,0 +1,151 @@
+import { call, clearSession, isDemo } from '../api.js';
+import { resetDemo } from '../mock.js';
+import { loadMeta, methodLabel, state } from '../state.js';
+import { confirmDialog, esc, formError, submitting, toast } from '../util.js';
+
+export function renderSettings(view) {
+  const s = state.meta.settings;
+  const cats = { IN: [...state.meta.categories.IN], OUT: [...state.meta.categories.OUT] };
+  const refresh = async () => {
+    await loadMeta();
+    renderSettings(view);
+  };
+
+  view.innerHTML = `
+    <section class="page settings">
+      <h1 class="page-title">Settings</h1>
+
+      <form class="panel form" id="balances" novalidate>
+        <h2>Starting balances</h2>
+        <p class="muted">The balance in each account at the start of the first day you track. Every later day's opening balance is worked out from this automatically.</p>
+        <label>First day tracked<input type="date" name="startDate" value="${esc(s.startDate)}"></label>
+        <div class="grid3">
+          ${s.methods.map(m => `
+            <label>${esc(methodLabel(m))} (৳)<input name="opening_${esc(m)}" type="number" step="0.01" inputmode="decimal" value="${esc(s[`opening_${m}`])}"></label>`).join('')}
+        </div>
+        <label>Payment methods (comma separated)
+          <input name="methods" value="${esc(s.methods.join(', '))}">
+        </label>
+        <p class="form-error" hidden></p>
+        <div class="actions"><button class="btn primary">Save balances</button></div>
+      </form>
+
+      <div class="panel" id="cats">
+        <h2>Categories</h2>
+        <p class="muted">Used to group income and expenses in the monthly report. Removing a category doesn't change old entries.</p>
+        <div class="two-col">
+          ${catEditor('OUT', 'Cash out (expenses)', cats.OUT)}
+          ${catEditor('IN', 'Cash in (income)', cats.IN)}
+        </div>
+        <div class="actions"><button class="btn primary" id="save-cats">Save categories</button></div>
+      </div>
+
+      <form class="panel form" id="business" novalidate>
+        <h2>Business details</h2>
+        <p class="muted">Printed at the top of the daily ledger.</p>
+        <label>Business name<input name="businessName" maxlength="200" value="${esc(s.businessName)}"></label>
+        <label>Address<input name="address" maxlength="200" value="${esc(s.address)}"></label>
+        <div class="grid2">
+          <label>Phone<input name="phone" maxlength="40" value="${esc(s.phone)}"></label>
+          <label>Prepared by<input name="preparedBy" maxlength="100" value="${esc(s.preparedBy)}"></label>
+        </div>
+        <p class="form-error" hidden></p>
+        <div class="actions"><button class="btn primary">Save details</button></div>
+      </form>
+
+      <div class="panel">
+        <h2>This device</h2>
+        <p class="muted">${isDemo() ? 'You are using the demo. Changes are saved in this browser only.' : 'Connected to your Google Sheet.'}</p>
+        <div class="actions start">
+          ${isDemo() ? '<button class="btn" id="reset-demo">Reset demo data</button>' : ''}
+          <button class="btn danger ghost" id="signout">Sign out</button>
+        </div>
+      </div>
+    </section>`;
+
+  const balances = view.querySelector('#balances');
+  balances.addEventListener('submit', async e => {
+    e.preventDefault();
+    const v = Object.fromEntries(new FormData(balances));
+    const list = v.methods.split(',').map(x => x.trim()).filter(Boolean);
+    if (!list.length) return formError(balances, 'Keep at least one payment method.');
+    const ok = await submitting(balances, () => call('saveSettings', { settings: { ...v, methods: list } }));
+    if (!ok) return;
+    toast('Balances saved');
+    refresh();
+  });
+
+  const business = view.querySelector('#business');
+  business.addEventListener('submit', async e => {
+    e.preventDefault();
+    const ok = await submitting(business, () => call('saveSettings', { settings: Object.fromEntries(new FormData(business)) }));
+    if (!ok) return;
+    toast('Details saved');
+    refresh();
+  });
+
+  const catBox = view.querySelector('#cats');
+  const drawChips = type => {
+    catBox.querySelector(`[data-chips="${type}"]`).innerHTML = cats[type]
+      .map((c, i) => `<li class="tag">${esc(c)}<button type="button" aria-label="Remove ${esc(c)}" data-remove="${type}:${i}">×</button></li>`)
+      .join('');
+  };
+  ['IN', 'OUT'].forEach(drawChips);
+  catBox.onclick = e => {
+    const rm = e.target.closest('[data-remove]');
+    if (!rm) return;
+    const [type, i] = rm.dataset.remove.split(':');
+    cats[type].splice(Number(i), 1);
+    drawChips(type);
+  };
+  catBox.querySelectorAll('[data-add-cat]').forEach(f => {
+    f.addEventListener('submit', e => {
+      e.preventDefault();
+      const type = f.dataset.addCat;
+      const name = f.elements.name.value.trim();
+      if (!name) return;
+      if (cats[type].some(c => c.toLowerCase() === name.toLowerCase())) return toast(`${name} is already in the list`, 'error');
+      cats[type].push(name);
+      f.reset();
+      drawChips(type);
+    });
+  });
+  view.querySelector('#save-cats').onclick = async e => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      await call('saveCategories', { categories: cats });
+      toast('Categories saved');
+      refresh();
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  view.querySelector('#signout').onclick = async () => {
+    if (!(await confirmDialog('Sign out on this device?', { okLabel: 'Sign out', danger: false }))) return;
+    clearSession();
+    location.hash = '#/day';
+    location.reload();
+  };
+  view.querySelector('#reset-demo')?.addEventListener('click', async () => {
+    if (!(await confirmDialog('Reset the demo back to the 1 Oct sample data?', { okLabel: 'Reset' }))) return;
+    resetDemo();
+    toast('Demo data reset');
+    refresh();
+  });
+}
+
+function catEditor(type, title, list) {
+  return `
+    <div>
+      <h3>${title}</h3>
+      <ul class="tags" data-chips="${type}"></ul>
+      <form class="inline-add" data-add-cat="${type}" novalidate>
+        <input name="name" maxlength="60" placeholder="New category" aria-label="New ${title} category">
+        <button class="btn">Add</button>
+      </form>
+    </div>`;
+}
