@@ -27,7 +27,7 @@ export function openTxnForm({ type, date, txn, onSaved }) {
         ${type === 'TRANSFER' ? '' : `
           <label>${type === 'IN' ? 'Customer / description' : 'Description'}
             <input name="description" maxlength="200" required autofocus value="${esc(t.description || '')}"
-              placeholder="${type === 'IN' ? 'e.g. MR. ARIF' : 'e.g. Lunch for staff'}">
+              placeholder="${type === 'IN' ? 'e.g. Customer name' : 'e.g. Lunch for staff'}">
           </label>`}
         <div class="grid2">
           <label>Amount (৳)<input name="amount" type="number" inputmode="decimal" min="0" step="0.01" required value="${esc(t.amount ?? '')}" ${type === 'TRANSFER' ? 'autofocus' : ''}></label>

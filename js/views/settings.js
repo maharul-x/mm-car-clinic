@@ -30,6 +30,26 @@ export function renderSettings(view) {
         <div class="actions"><button class="btn primary">Save balances</button></div>
       </form>
 
+      <form class="panel form" id="salary-rules" novalidate>
+        <h2>Salary rules</h2>
+        <p class="muted">How absent days are deducted on the salary sheet.</p>
+        <div class="grid2">
+          <label>One day's pay is basic salary ÷
+            <select name="salaryBasis">
+              <option value="30" ${s.salaryBasis === 'month' ? '' : 'selected'}>30 (every month)</option>
+              <option value="month" ${s.salaryBasis === 'month' ? 'selected' : ''}>Number of days in that month</option>
+            </select>
+          </label>
+          <label>Weekly off day
+            <select name="weeklyOff">
+              ${['', 'Fri', 'Sat', 'Sun', 'Fri,Sat'].map(d => `<option value="${d}" ${String(s.weeklyOff || '') === d ? 'selected' : ''}>${d ? d.replace(',', ' + ') : 'None'}</option>`).join('')}
+            </select>
+          </label>
+        </div>
+        <p class="form-error" hidden></p>
+        <div class="actions"><button class="btn primary">Save salary rules</button></div>
+      </form>
+
       <div class="panel" id="cats">
         <h2>Categories</h2>
         <p class="muted">Used to group income and expenses in the monthly report. Removing a category doesn't change old entries.</p>
@@ -72,6 +92,15 @@ export function renderSettings(view) {
     const ok = await submitting(balances, () => call('saveSettings', { settings: { ...v, methods: list } }));
     if (!ok) return;
     toast('Balances saved');
+    refresh();
+  });
+
+  const rules = view.querySelector('#salary-rules');
+  rules.addEventListener('submit', async e => {
+    e.preventDefault();
+    const ok = await submitting(rules, () => call('saveSettings', { settings: Object.fromEntries(new FormData(rules)) }));
+    if (!ok) return;
+    toast('Salary rules saved');
     refresh();
   });
 
@@ -131,7 +160,7 @@ export function renderSettings(view) {
     location.reload();
   };
   view.querySelector('#reset-demo')?.addEventListener('click', async () => {
-    if (!(await confirmDialog('Reset the demo back to the 1 Oct sample data?', { okLabel: 'Reset' }))) return;
+    if (!(await confirmDialog('Reset the demo back to the sample data?', { okLabel: 'Reset' }))) return;
     resetDemo();
     toast('Demo data reset');
     refresh();

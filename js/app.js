@@ -1,6 +1,6 @@
 import { clearSession, hasSession, isDemo } from './api.js';
 import { loadMeta, state } from './state.js';
-import { esc, loading } from './util.js';
+import { esc, guard, loading } from './util.js';
 import { renderDay } from './views/day.js';
 import { renderInventory } from './views/inventory.js';
 import { renderLogin } from './views/login.js';
@@ -13,10 +13,29 @@ const ROUTES = { day: renderDay, month: renderMonth, inventory: renderInventory,
 const view = document.getElementById('view');
 const topbar = document.getElementById('topbar');
 let renderId = 0;
+let currentHash = location.hash;
+let restoring = false;
+
+window.addEventListener('beforeunload', e => {
+  if (guard.message) e.preventDefault();
+});
 
 async function route() {
+  if (restoring) {
+    restoring = false;
+    return;
+  }
+  if (guard.message && location.hash !== currentHash) {
+    if (!window.confirm(guard.message)) {
+      restoring = true;
+      location.hash = currentHash;
+      return;
+    }
+  }
+  guard.message = null;
+  currentHash = location.hash;
   const id = ++renderId;
-  const [name, arg] = location.hash.replace(/^#\/?/, '').split('/');
+  const [name, ...args] = location.hash.replace(/^#\/?/, '').split('/');
   view.onclick = null;
 
   if (!hasSession()) {
@@ -39,7 +58,7 @@ async function route() {
       await loadMeta();
     }
     if (id !== renderId) return;
-    await ROUTES[page](view, arg);
+    await ROUTES[page](view, ...args);
   } catch (err) {
     if (id !== renderId) return;
     if (err.code === 'AUTH') {

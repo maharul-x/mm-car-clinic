@@ -1,7 +1,7 @@
 // In-browser stand-in for the Apps Script server, used by "Try the demo".
-// Data lives in this browser only and starts from the real 1 Oct 2026 ledger.
+// Data lives in this browser only. The sample data is made up.
 
-const KEY = 'mm.demo.v1';
+const KEY = 'mm.demo.v3';
 let db = null;
 
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
@@ -20,39 +20,54 @@ function seed() {
   ];
   const move = (item, type, qty, note) =>
     ({ id: uid(), date, itemId: item.id, type, qty, unitPrice: item.costPrice, reference: '', note, txnId: '', createdAt: '2026-10-01T09:00:00' });
+  const emp = (name, designation, basicSalary, trackAttendance = true) =>
+    ({ id: uid(), name, designation, basicSalary, phone: '', joinDate: '', trackAttendance, active: true, sortOrder: 0 });
+  const employees = [
+    emp('Sample Mechanic', 'Senior Mechanic', 22000),
+    emp('Sample Painter', 'Paint', 18000),
+    emp('Sample Helper', 'Asst. Engine Technician', 6000),
+    emp('Sample Front Desk', 'CRE', 15000),
+    emp('Sample Investor', 'Investor', 15000, false),
+  ];
+  employees.forEach((e, i) => { e.sortOrder = i + 1; });
+  const att = (e, day, status) => ({ date: `2026-10-${String(day).padStart(2, '0')}`, employeeId: e.id, status, note: '' });
   return {
+    employees,
+    attendance: [
+      att(employees[0], 1, 'P'), att(employees[1], 1, 'P'), att(employees[2], 1, 'A'), att(employees[3], 1, 'P'),
+      att(employees[0], 3, 'H'), att(employees[2], 5, 'A'), att(employees[1], 7, 'L'),
+    ],
+    payments: [
+      { id: uid(), date: '2026-10-05', employeeId: employees[0].id, month: '2026-10', type: 'ADVANCE', amount: 2000, method: 'Cash', note: '', txnId: '', source: 'demo' },
+      { id: uid(), date: '2026-10-08', employeeId: employees[2].id, month: '2026-10', type: 'ADVANCE', amount: 1000, method: 'Cash', note: '', txnId: '', source: 'demo' },
+    ],
     settings: {
+      salaryBasis: '30',
+      weeklyOff: 'Fri',
       businessName: 'M & M CAR CLINIC',
       address: 'BAIZID LINK ROAD, AREFIN NAGOR, NEAR SOUTHERN UNIVERSITY',
       phone: '01708-523230',
-      preparedBy: 'Mohammad Maharul Islam',
+      preparedBy: 'Manager',
       methods: ['Cash', 'Bank', 'Bkash'],
       startDate: date,
-      opening_Cash: 23496,
-      opening_Bank: 36932,
-      opening_Bkash: 1750,
+      opening_Cash: 20000,
+      opening_Bank: 40000,
+      opening_Bkash: 2000,
     },
     categories: {
       IN: ['Customer Payment', 'Other Income'],
       OUT: ['Food', 'Salary', 'Workshop', 'Parts Purchase', 'Commission', 'Utility', 'Rent', 'Transport', 'Other'],
     },
     txns: [
-      t('IN', 'INV-000475', 'MR. ARIF', 2000, 'Cash', 'Customer Payment'),
-      t('IN', 'INV-000393', 'DR. SM AHASANUL KARIM', 20000, 'Bank', 'Customer Payment'),
-      t('IN', 'INV-000478', 'MR.BELAL', 500, 'Cash', 'Customer Payment'),
-      t('IN', 'INV-000479', 'MR. ARSHASD ALAM', 500, 'Cash', 'Customer Payment'),
-      t('IN', 'INV-000414', 'MR.SHAHJAHAN', 15000, 'Bank', 'Customer Payment'),
-      t('OUT', '', 'NASTA (FOOD)', 190, 'Cash', 'Food'),
-      t('OUT', 'INV-000442', 'BCM - MANIK', 11000, 'Cash', 'Uncategorized'),
-      t('OUT', '', 'FOR TISSUE - WAJED  (workshop)', 80, 'Cash', 'Workshop'),
-      t('OUT', 'INV-000476', 'DRIVER COMMISION', 500, 'Cash', 'Uncategorized'),
-      t('OUT', '', 'LUNCH (FOOD)', 560, 'Cash', 'Food'),
-      t('OUT', '', 'COFFE+BISCUIT (FOOD)', 150, 'Cash', 'Food'),
-      t('OUT', '', 'FAHIM (salary)', 100, 'Cash', 'Salary'),
-      t('OUT', '', 'RIFAT (salary)', 150, 'Cash', 'Salary'),
-      t('OUT', '', 'RUBEL SEP ADV (SALARY)', 1000, 'Cash', 'Salary'),
-      t('OUT', '', 'RONY SEP ADV (SALARY)', 1000, 'Cash', 'Salary'),
-      t('OUT', '', 'OIL FILLER (WORKSHOP)', 20, 'Cash', 'Workshop'),
+      t('IN', 'INV-001001', 'SAMPLE CUSTOMER A', 3500, 'Cash', 'Customer Payment'),
+      t('IN', 'INV-001002', 'SAMPLE CUSTOMER B', 18000, 'Bank', 'Customer Payment'),
+      t('IN', 'INV-001003', 'SAMPLE CUSTOMER C', 1200, 'Bkash', 'Customer Payment'),
+      t('OUT', '', 'BREAKFAST (FOOD)', 200, 'Cash', 'Food'),
+      t('OUT', 'PO-0501', 'PARTS SUPPLIER', 7500, 'Cash', 'Uncategorized'),
+      t('OUT', '', 'CLEANING SUPPLIES (WORKSHOP)', 150, 'Cash', 'Workshop'),
+      t('OUT', '', 'LUNCH (FOOD)', 600, 'Cash', 'Food'),
+      t('OUT', '', 'MECHANIC 1 ADVANCE (SALARY)', 1000, 'Cash', 'Salary'),
+      t('OUT', '', 'HELPER DAILY (SALARY)', 300, 'Cash', 'Salary'),
     ],
     items,
     moves: [
@@ -236,6 +251,68 @@ const handlers = {
     return { deleted: true };
   },
 };
+
+const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+Object.assign(handlers, {
+  employees: () => [...db.employees].sort((a, b) => a.sortOrder - b.sortOrder),
+  saveEmployee: ({ employee }) => {
+    const e = { ...employee, name: String(employee.name || '').trim(), basicSalary: r2(employee.basicSalary), active: employee.active !== false, trackAttendance: employee.trackAttendance !== false };
+    if (!e.name) throw new Error('Employee name is required.');
+    if (e.id) {
+      const i = find(db.employees, e.id);
+      db.employees[i] = { ...db.employees[i], ...e };
+    } else {
+      e.id = uid();
+      e.sortOrder = db.employees.reduce((m, x) => Math.max(m, x.sortOrder), 0) + 1;
+      db.employees.push(e);
+    }
+    return e;
+  },
+  deleteEmployee: ({ id }) => {
+    const i = find(db.employees, id);
+    if (db.attendance.some(a => a.employeeId === id) || db.payments.some(p => p.employeeId === id)) {
+      db.employees[i].active = false;
+      return { archived: true };
+    }
+    db.employees.splice(i, 1);
+    return { deleted: true };
+  },
+  salaryMonth: ({ month }) => ({
+    month,
+    employees: handlers.employees(),
+    attendance: db.attendance.filter(a => a.date.startsWith(month) && a.status),
+    payments: db.payments.filter(p => p.month === month).sort((a, b) => a.date.localeCompare(b.date)),
+  }),
+  saveAttendance: ({ records }) => {
+    records.forEach(r => {
+      const i = db.attendance.findIndex(a => a.date === r.date && a.employeeId === r.employeeId);
+      if (i >= 0) db.attendance[i] = { ...db.attendance[i], status: r.status };
+      else if (r.status) db.attendance.push({ date: r.date, employeeId: r.employeeId, status: r.status, note: '' });
+    });
+    return { saved: records.length };
+  },
+  addSalaryPayment: ({ payment, cash }) => {
+    const e = db.employees[find(db.employees, payment.employeeId)];
+    const p = { ...payment, id: uid(), amount: r2(payment.amount), txnId: '', source: 'app' };
+    if (!(p.amount > 0)) throw new Error('Amount must be more than 0.');
+    if (cash) {
+      const mon = MONTHS[Number(p.month.slice(5, 7)) - 1];
+      p.txnId = addTxn({
+        date: p.date, type: 'OUT', category: 'Salary', amount: p.amount, method: p.method, note: p.note || 'From salary tracker',
+        description: `${e.name.toUpperCase()} ${mon}${p.type === 'ADVANCE' ? ' ADV' : ' SALARY'} (SALARY)`,
+      }).id;
+    }
+    db.payments.push(p);
+    return { id: p.id, txnId: p.txnId };
+  },
+  deleteSalaryPayment: ({ id }) => {
+    const [p] = db.payments.splice(find(db.payments, id), 1);
+    const ti = db.txns.findIndex(t => t.id === p.txnId);
+    if (ti >= 0) db.txns.splice(ti, 1);
+    return { deleted: true };
+  },
+});
 
 export async function mockCall(action, params) {
   await new Promise(r => setTimeout(r, 120));

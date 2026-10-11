@@ -4,7 +4,7 @@
  * Paste this file into Extensions → Apps Script of the Google Sheet that is
  * the database, then deploy it as a Web app. See README.md for the steps.
  *
- * Every request is a POST with a JSON body: { action, pin, ...params }.
+ * Every request is a POST with a JSON body: { action, pin (the app password), ...params }.
  * Replies are { ok: true, data } or { ok: false, error, code }.
  */
 
@@ -14,15 +14,20 @@ const TABS = {
   SET: { name: 'Settings', headers: ['key', 'value'] },
   ITEM: { name: 'Inventory', headers: ['id', 'sku', 'name', 'category', 'unit', 'costPrice', 'salePrice', 'reorderLevel', 'active', 'createdAt', 'updatedAt'] },
   MOVE: { name: 'StockMoves', headers: ['id', 'date', 'itemId', 'type', 'qty', 'unitPrice', 'reference', 'note', 'txnId', 'createdAt'] },
+  EMP: { name: 'Employees', headers: ['id', 'name', 'designation', 'basicSalary', 'phone', 'joinDate', 'trackAttendance', 'active', 'sortOrder', 'createdAt', 'updatedAt'] },
+  ATT: { name: 'Attendance', headers: ['key', 'date', 'employeeId', 'status', 'note', 'updatedAt'] },
+  PAY: { name: 'SalaryPayments', headers: ['id', 'date', 'employeeId', 'month', 'type', 'amount', 'method', 'note', 'txnId', 'source', 'createdAt'] },
 };
 
 const DEFAULT_SETTINGS = {
   businessName: 'M & M CAR CLINIC',
   address: 'BAIZID LINK ROAD, AREFIN NAGOR, NEAR SOUTHERN UNIVERSITY',
   phone: '01708-523230',
-  preparedBy: 'Mohammad Maharul Islam',
+  preparedBy: '',
   methods: 'Cash,Bank,Bkash',
   startDate: '',
+  salaryBasis: '30',
+  weeklyOff: 'Fri',
 };
 
 const DEFAULT_CATEGORIES = {
@@ -32,9 +37,11 @@ const DEFAULT_CATEGORIES = {
 
 const TXN_TYPES = ['IN', 'OUT', 'TRANSFER'];
 const MOVE_TYPES = ['IN', 'OUT', 'ADJUST'];
-const SETTING_KEYS = /^(businessName|address|phone|preparedBy|methods|startDate|opening_[A-Za-z0-9 ]+)$/;
+const ATT_STATUSES = ['P', 'A', 'H', 'L', 'O', ''];
+const PAY_TYPES = ['ADVANCE', 'SALARY'];
+const SETTING_KEYS = /^(businessName|address|phone|preparedBy|methods|startDate|salaryBasis|weeklyOff|opening_[A-Za-z0-9 ]+)$/;
 // Columns written as real dates; every other string is forced to plain text.
-const DATE_FIELDS = ['date', 'createdAt', 'updatedAt'];
+const DATE_FIELDS = ['date', 'joinDate', 'createdAt', 'updatedAt'];
 
 // ───────────────────────────── Sheet menu ─────────────────────────────
 
@@ -42,8 +49,9 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('M&M App')
     .addItem('1. Set up / repair tabs', 'setup')
-    .addItem('2. Set app PIN', 'setPin')
+    .addItem('2. Set app password', 'setPin')
     .addItem('3. Import old daily sheets', 'importLegacySheets')
+    .addItem('4. Import employees from a salary sheet', 'importSalarySheet')
     .addToUi();
 }
 
@@ -81,16 +89,16 @@ function ensureTabs_() {
 
 function setPin() {
   const ui = SpreadsheetApp.getUi();
-  const res = ui.prompt('Set app PIN', 'Choose a PIN of at least 6 characters. Everyone who uses the app signs in with it.', ui.ButtonSet.OK_CANCEL);
+  const res = ui.prompt('Set app password', 'Choose a password of at least 8 characters. Everyone who uses the app signs in with it.', ui.ButtonSet.OK_CANCEL);
   if (res.getSelectedButton() !== ui.Button.OK) return;
   const pin = res.getResponseText().trim();
-  if (pin.length < 6) {
-    ui.alert('The PIN must be at least 6 characters. Nothing was changed.');
+  if (pin.length < 8) {
+    ui.alert('The password must be at least 8 characters. Nothing was changed.');
     return;
   }
   PropertiesService.getScriptProperties().setProperty('APP_PIN', pin);
   CacheService.getScriptCache().remove('pinFails');
-  ui.alert('PIN saved.');
+  ui.alert('Password saved. Anyone signed in with the old password will need the new one.');
 }
 
 // ───────────────────────────── Web API ─────────────────────────────
@@ -110,8 +118,16 @@ const API = {
   addMove: req => addMove_(req),
   moves: req => moves_(req.itemId),
   deleteMove: req => deleteMove_(req.id),
+  employees: () => employees_(),
+  saveEmployee: req => saveEmployee_(req.employee),
+  deleteEmployee: req => deleteEmployee_(req.id),
+  salaryMonth: req => salaryMonth_(req.month),
+  saveAttendance: req => saveAttendance_(req.records),
+  addSalaryPayment: req => addSalaryPayment_(req),
+  deleteSalaryPayment: req => deleteSalaryPayment_(req.id),
 };
-const WRITES = ['addTxn', 'updateTxn', 'deleteTxn', 'saveSettings', 'saveCategories', 'saveItem', 'deleteItem', 'addMove', 'deleteMove'];
+const WRITES = ['addTxn', 'updateTxn', 'deleteTxn', 'saveSettings', 'saveCategories', 'saveItem', 'deleteItem', 'addMove', 'deleteMove',
+  'saveEmployee', 'deleteEmployee', 'saveAttendance', 'addSalaryPayment', 'deleteSalaryPayment'];
 
 function doGet() {
   return json_({ ok: true, data: { app: 'M&M Car Clinic API' } });
@@ -132,13 +148,13 @@ function doPost(e) {
 
 function checkPin_(pin) {
   const expected = PropertiesService.getScriptProperties().getProperty('APP_PIN');
-  if (!expected) throw codeError_('No PIN has been set yet. In the Google Sheet, use M&M App → Set app PIN.', 'AUTH');
+  if (!expected) throw codeError_('No password has been set yet. In the Google Sheet, use M&M App → Set app password.', 'AUTH');
   const cache = CacheService.getScriptCache();
   const fails = Number(cache.get('pinFails') || 0);
-  if (fails >= 10) throw codeError_('Too many wrong PIN attempts. Try again in 15 minutes.', 'AUTH');
+  if (fails >= 10) throw codeError_('Too many wrong password attempts. Try again in 15 minutes.', 'AUTH');
   if (String(pin || '') !== expected) {
     cache.put('pinFails', String(fails + 1), 900);
-    throw codeError_('Wrong PIN.', 'AUTH');
+    throw codeError_('Wrong password.', 'AUTH');
   }
 }
 
@@ -265,6 +281,10 @@ function saveSettings_(input) {
       if (v && !isDate_(v)) throw new Error('Invalid start date.');
     } else if (key.indexOf('opening_') === 0) {
       v = num_(v);
+    } else if (key === 'salaryBasis') {
+      v = String(v) === 'month' ? 'month' : '30';
+    } else if (key === 'weeklyOff') {
+      v = str_(v, 40);
     } else {
       v = str_(v, 200);
     }
@@ -457,6 +477,267 @@ function deleteMove_(id) {
     try { deleteRowById_(TABS.TXN, txnId); } catch (e) { /* cash entry was already deleted */ }
   }
   return { deleted: true };
+}
+
+// ───────────────────────────── Employees, attendance & salary ─────────────────────────────
+
+function cleanEmp_(r) {
+  const flag = v => v !== false && String(v).toUpperCase() !== 'FALSE';
+  return {
+    id: String(r.id),
+    name: String(r.name),
+    designation: String(r.designation),
+    basicSalary: Number(r.basicSalary) || 0,
+    phone: String(r.phone),
+    joinDate: r.joinDate ? String(r.joinDate).slice(0, 10) : '',
+    trackAttendance: flag(r.trackAttendance),
+    active: flag(r.active),
+    sortOrder: Number(r.sortOrder) || 0,
+  };
+}
+
+function employees_() {
+  return readRows_(TABS.EMP).map(cleanEmp_).sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+function saveEmployee_(x) {
+  x = x || {};
+  const e = {
+    id: str_(x.id, 64),
+    name: str_(x.name, 100),
+    designation: str_(x.designation, 100),
+    basicSalary: num_(x.basicSalary),
+    phone: str_(x.phone, 40),
+    joinDate: str_(x.joinDate, 10),
+    trackAttendance: x.trackAttendance !== false,
+    active: x.active !== false,
+  };
+  if (!e.name) throw new Error('Employee name is required.');
+  if (e.basicSalary < 0) throw new Error('Basic salary cannot be negative.');
+  if (e.joinDate && !isDate_(e.joinDate)) throw new Error('Invalid joining date.');
+  const sh = sheet_(TABS.EMP);
+  const now = new Date();
+  if (e.id) {
+    const row = findRow_(TABS.EMP, e.id);
+    const old = readRow_(TABS.EMP, row);
+    e.sortOrder = old.sortOrder;
+    e.createdAt = old.createdAt;
+    e.updatedAt = now;
+    sh.getRange(row, 1, 1, TABS.EMP.headers.length).setValues([toRow_(TABS.EMP, e)]);
+  } else {
+    e.id = Utilities.getUuid();
+    e.sortOrder = employees_().reduce((m, r) => Math.max(m, r.sortOrder), 0) + 1;
+    e.createdAt = now;
+    e.updatedAt = now;
+    sh.appendRow(toRow_(TABS.EMP, e));
+  }
+  return cleanEmp_(e);
+}
+
+function deleteEmployee_(id) {
+  const row = findRow_(TABS.EMP, id);
+  const used = readRows_(TABS.ATT).some(a => String(a.employeeId) === String(id) && a.status) ||
+    readRows_(TABS.PAY).some(p => String(p.employeeId) === String(id));
+  if (used) {
+    // Keep attendance and payment history: archive instead of deleting.
+    sheet_(TABS.EMP).getRange(row, TABS.EMP.headers.indexOf('active') + 1).setValue(false);
+    return { archived: true };
+  }
+  sheet_(TABS.EMP).deleteRow(row);
+  return { deleted: true };
+}
+
+function salaryMonth_(month) {
+  if (!/^\d{4}-\d{2}$/.test(String(month || ''))) throw new Error('Invalid month.');
+  return {
+    month: month,
+    employees: employees_(),
+    attendance: readRows_(TABS.ATT)
+      .filter(a => String(a.date).slice(0, 7) === month && a.status)
+      .map(a => ({ date: String(a.date).slice(0, 10), employeeId: String(a.employeeId), status: String(a.status), note: String(a.note) })),
+    payments: readRows_(TABS.PAY)
+      .filter(p => String(p.month) === month)
+      .map(cleanPay_)
+      .sort((a, b) => a.date.localeCompare(b.date)),
+  };
+}
+
+function saveAttendance_(records) {
+  if (!Array.isArray(records) || !records.length) throw new Error('Nothing to save.');
+  if (records.length > 3000) throw new Error('Too many changes at once. Save in smaller batches.');
+  const ids = {};
+  employees_().forEach(e => { ids[e.id] = true; });
+  const sh = sheet_(TABS.ATT);
+  const at = {};
+  readRows_(TABS.ATT).forEach(r => { at[String(r.key)] = r._row; });
+  const now = new Date();
+  const appends = [];
+  records.forEach(x => {
+    const a = { date: str_(x.date, 10), employeeId: str_(x.employeeId, 64), status: str_(x.status, 1).toUpperCase(), note: str_(x.note, 200), updatedAt: now };
+    if (!isDate_(a.date)) throw new Error('Invalid attendance date.');
+    if (!ids[a.employeeId]) throw new Error('Unknown employee in attendance.');
+    if (ATT_STATUSES.indexOf(a.status) < 0) throw new Error('Unknown attendance status: ' + a.status);
+    a.key = a.date + '|' + a.employeeId;
+    const row = toRow_(TABS.ATT, a);
+    if (at[a.key]) sh.getRange(at[a.key], 1, 1, row.length).setValues([row]);
+    else if (a.status) appends.push(row);
+  });
+  if (appends.length) sh.getRange(sh.getLastRow() + 1, 1, appends.length, appends[0].length).setValues(appends);
+  return { saved: records.length };
+}
+
+function cleanPay_(p) {
+  return {
+    id: String(p.id),
+    date: String(p.date).slice(0, 10),
+    employeeId: String(p.employeeId),
+    month: String(p.month),
+    type: String(p.type).toUpperCase(),
+    amount: Number(p.amount) || 0,
+    method: String(p.method),
+    note: String(p.note),
+    txnId: String(p.txnId),
+    source: String(p.source),
+  };
+}
+
+function addSalaryPayment_(req) {
+  const x = req.payment || {};
+  const s = readSettings_();
+  const p = {
+    date: str_(x.date, 10),
+    employeeId: str_(x.employeeId, 64),
+    month: str_(x.month, 7),
+    type: str_(x.type, 10).toUpperCase(),
+    amount: num_(x.amount),
+    method: str_(x.method, 30),
+    note: str_(x.note, 200),
+    txnId: '',
+    source: 'app',
+  };
+  if (!isDate_(p.date)) throw new Error('Choose a valid date.');
+  if (!/^\d{4}-\d{2}$/.test(p.month)) throw new Error('Choose the salary month.');
+  if (PAY_TYPES.indexOf(p.type) < 0) throw new Error('Unknown payment type.');
+  if (!(p.amount > 0)) throw new Error('Amount must be more than 0.');
+  if (s.methods.indexOf(p.method) < 0) throw new Error('Unknown payment method: ' + p.method);
+  const emp = cleanEmp_(readRow_(TABS.EMP, findRow_(TABS.EMP, p.employeeId)));
+
+  if (req.cash) {
+    const cat = readCategories_().OUT.find(c => c.toLowerCase() === 'salary') || 'Salary';
+    const mon = MONTHS_[Number(p.month.slice(5, 7)) - 1];
+    const txn = saveTxn_({
+      date: p.date,
+      type: 'OUT',
+      description: emp.name.toUpperCase() + ' ' + mon + (p.type === 'ADVANCE' ? ' ADV' : ' SALARY') + ' (SALARY)',
+      category: cat,
+      amount: p.amount,
+      method: p.method,
+      note: p.note || 'From salary tracker',
+    }, false);
+    p.txnId = txn.id;
+  }
+  p.id = Utilities.getUuid();
+  p.createdAt = new Date();
+  sheet_(TABS.PAY).appendRow(toRow_(TABS.PAY, p));
+  return { id: p.id, txnId: p.txnId };
+}
+const MONTHS_ = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+function deleteSalaryPayment_(id) {
+  const row = findRow_(TABS.PAY, id);
+  const txnId = String(readRow_(TABS.PAY, row).txnId || '');
+  sheet_(TABS.PAY).deleteRow(row);
+  if (txnId) {
+    try { deleteRowById_(TABS.TXN, txnId); } catch (e) { /* cash entry was already deleted */ }
+  }
+  return { deleted: true };
+}
+
+/**
+ * Copies employees (and the advances already taken) from an existing
+ * "Monthly Salary Sheet". Employees are matched by name and updated.
+ * Advances are not added to the cash book because they are usually there already.
+ */
+function importSalarySheet() {
+  const ui = SpreadsheetApp.getUi();
+  ensureTabs_();
+  const urlRes = ui.prompt('Import salary sheet', 'Paste the link of the Google Sheet that has the salary sheet:', ui.ButtonSet.OK_CANCEL);
+  if (urlRes.getSelectedButton() !== ui.Button.OK) return;
+  const monthRes = ui.prompt('Import salary sheet', 'Which month are the advances for? (YYYY-MM, e.g. ' + today_().slice(0, 7) + ')', ui.ButtonSet.OK_CANCEL);
+  if (monthRes.getSelectedButton() !== ui.Button.OK) return;
+  const month = monthRes.getResponseText().trim();
+  if (!/^\d{4}-\d{2}$/.test(month)) {
+    ui.alert('The month must look like 2026-10. Nothing was imported.');
+    return;
+  }
+
+  let found = null;
+  SpreadsheetApp.openByUrl(urlRes.getResponseText().trim()).getSheets().some(sh => {
+    const v = sh.getDataRange().getValues();
+    const h = v.findIndex(r => r.some(c => /employee name/i.test(String(c))));
+    if (h < 0) return false;
+    found = { values: v, head: h };
+    return true;
+  });
+  if (!found) {
+    ui.alert('No tab with an "Employee Name" column was found in that sheet.');
+    return;
+  }
+  const head = found.values[found.head].map(c => String(c).toLowerCase());
+  const col = re => head.findIndex(c => re.test(c));
+  const cName = col(/employee name/), cDes = col(/designation/), cBasic = col(/basic/), cAdv = col(/advance/);
+
+  const people = [];
+  for (let i = found.head + 1; i < found.values.length; i++) {
+    const r = found.values[i];
+    const name = String(r[cName]).trim();
+    if (!name || /^total$/i.test(name)) continue;
+    people.push({
+      name: name,
+      designation: cDes >= 0 ? String(r[cDes]).trim() : '',
+      basicSalary: cBasic >= 0 ? num_(r[cBasic]) : 0,
+      advance: cAdv >= 0 ? num_(r[cAdv]) : 0,
+    });
+  }
+  const ok = ui.alert('Import salary sheet',
+    'Found ' + people.length + ' employees. Employees with the same name are updated, others are added. ' +
+    'Advances are recorded for ' + month + ' (replacing any earlier import for that month) but not added to the cash book. Continue?',
+    ui.ButtonSet.YES_NO);
+  if (ok !== ui.Button.YES) return;
+
+  withLock_(() => {
+    const byName = {};
+    employees_().forEach(e => { byName[e.name.toLowerCase()] = e; });
+    const s = readSettings_();
+    const payRows = readRows_(TABS.PAY).filter(p => !(String(p.source) === 'import' && String(p.month) === month));
+    const now = new Date();
+    people.forEach(p => {
+      const old = byName[p.name.toLowerCase()];
+      const emp = saveEmployee_({
+        id: old ? old.id : '',
+        name: p.name,
+        designation: p.designation,
+        basicSalary: p.basicSalary,
+        phone: old ? old.phone : '',
+        joinDate: old ? old.joinDate : '',
+        // Investors draw a fixed amount and don't clock in.
+        trackAttendance: old ? old.trackAttendance : !/invest/i.test(p.designation),
+        active: true,
+      });
+      if (p.advance > 0) {
+        payRows.push({
+          id: Utilities.getUuid(), date: month + '-01', employeeId: emp.id, month: month, type: 'ADVANCE', amount: p.advance,
+          method: s.methods[0], note: 'Imported from salary sheet', txnId: '', source: 'import', createdAt: now,
+        });
+      }
+    });
+    const sh = sheet_(TABS.PAY);
+    const H = TABS.PAY.headers;
+    const n = sh.getLastRow();
+    if (n > 1) sh.getRange(2, 1, n - 1, H.length).clearContent();
+    if (payRows.length) sh.getRange(2, 1, payRows.length, H.length).setValues(payRows.map(p => toRow_(TABS.PAY, p)));
+  });
+  ui.alert('Imported ' + people.length + ' employees.');
 }
 
 // ───────────────────────────── Import old daily sheets ─────────────────────────────

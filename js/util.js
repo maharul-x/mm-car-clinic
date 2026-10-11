@@ -53,7 +53,10 @@ export function groupBy(list, key) {
   return m;
 }
 
-export const loading = (text = 'Loading…') => `<div class="loading" role="status"><span class="spinner"></span>${esc(text)}</div>`;
+/** A screen with unsaved changes sets guard.message; the router asks before leaving. */
+export const guard = { message: null };
+
+export const loading =(text = 'Loading…') => `<div class="loading" role="status"><span class="spinner"></span>${esc(text)}</div>`;
 
 export function toast(msg, kind = 'ok') {
   const el = document.getElementById('toast');
