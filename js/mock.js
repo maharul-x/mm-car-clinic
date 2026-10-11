@@ -73,7 +73,7 @@ function seed() {
     },
     categories: {
       IN: ['Customer Payment', 'Other Income'],
-      OUT: ['Food', 'Salary', 'Workshop', 'Parts Purchase', 'Commission', 'Utility', 'Invoice', 'Rent', 'Transport', 'Other'],
+      OUT: ['Food', 'Salary', 'Workshop', 'Parts Purchase', 'Vendor Payment', 'Commission', 'Utility', 'Invoice', 'Rent', 'Transport', 'Other'],
     },
     txns: [
       t('IN', 'INV-001001', 'SAMPLE CUSTOMER A', 3500, 'Cash', 'Customer Payment'),

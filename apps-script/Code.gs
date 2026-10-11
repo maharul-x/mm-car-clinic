@@ -33,7 +33,7 @@ const DEFAULT_SETTINGS = {
 
 const DEFAULT_CATEGORIES = {
   IN: ['Customer Payment', 'Other Income'],
-  OUT: ['Food', 'Salary', 'Workshop', 'Parts Purchase', 'Commission', 'Utility', 'Invoice', 'Rent', 'Transport', 'Other'],
+  OUT: ['Food', 'Salary', 'Workshop', 'Parts Purchase', 'Vendor Payment', 'Commission', 'Utility', 'Invoice', 'Rent', 'Transport', 'Other'],
 };
 
 const TXN_TYPES = ['IN', 'OUT', 'TRANSFER'];
@@ -1458,10 +1458,15 @@ function legacyCategory_(desc, type, cats, invoice) {
     if (/COMMIS/.test(d) && pick('Commission')) return pick('Commission');
     if (/\b(LUNCH|NASTA|TEA|COFFE+|BISCUIT|SNACKS?)\b/.test(d) && pick('Food')) return pick('Food');
     if (/\bDAY WORK\b/.test(d) && pick('Salary')) return pick('Salary');
-    if (String(invoice || '').trim()) {
-      if (!pick('Invoice')) list.push('Invoice');
-      return pick('Invoice');
-    }
+    const ensure = name => {
+      if (!pick(name)) list.push(name);
+      return pick(name);
+    };
+    if (String(invoice || '').trim()) return ensure('Invoice');
+    // House rules for the old sheets (entries without an invoice number):
+    if (/\bTISSUE\b|\bTAX\b/.test(d)) return ensure('Workshop');
+    if (/\bDUE PAYMENT\b/.test(d)) return ensure('Vendor Payment');
+    if (/^\s*[A-Z]{3,}\s*$/.test(d)) return ensure('Salary'); // just a person's name = paid to staff
     return 'Uncategorized';
   }
   return list.indexOf('Customer Payment') >= 0 ? 'Customer Payment' : list[0];
