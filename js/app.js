@@ -138,6 +138,56 @@ document.getElementById('signout').onclick = async () => {
   route();
 };
 
+/**
+ * Copies each table's column headings onto its cells (data-label), so on phones a row can show as
+ * "Amount: 600" stacked lines instead of a wide table. Runs for every table the app draws.
+ */
+function labelTables(root) {
+  root.querySelectorAll('table.table').forEach(t => {
+    const heads = [...t.querySelectorAll('thead th')].map(th => (th.querySelector('.sr') ? '' : th.textContent.trim()));
+    if (!heads.length) return;
+    t.querySelectorAll('tbody tr, tfoot tr').forEach(tr => {
+      let col = 0;
+      [...tr.children].forEach(td => {
+        if (!td.hasAttribute('data-label')) {
+          td.setAttribute('data-label', heads[col] || '');
+          // Keep a cell's pieces (text, tag, "by …") together as one block when stacked.
+          const parts = [...td.childNodes].filter(n => n.nodeType === 1 || n.textContent.trim());
+          if (parts.length > 1 && !td.classList.contains('row-actions')) {
+            const wrap = document.createElement('span');
+            wrap.className = 'cell';
+            while (td.firstChild) wrap.appendChild(td.firstChild);
+            td.appendChild(wrap);
+          }
+        }
+        col += td.colSpan || 1;
+      });
+    });
+  });
+}
+/** Tables wider than their box switch to stacked rows instead of scrolling sideways. */
+function fitTables(root) {
+  root.querySelectorAll('table.table:not(.keep)').forEach(t => {
+    const box = t.closest('.table-wrap') || t.parentElement;
+    t.classList.remove('stacked');
+    if (box.clientWidth && t.scrollWidth > box.clientWidth + 2) t.classList.add('stacked');
+  });
+}
+const tidy = () => {
+  [view, document.getElementById('modal-root')].forEach(root => {
+    labelTables(root);
+    fitTables(root);
+  });
+};
+let resizeTimer = 0;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(tidy, 120);
+});
+const labeller = new MutationObserver(tidy);
+labeller.observe(view, { childList: true, subtree: true });
+labeller.observe(document.getElementById('modal-root'), { childList: true, subtree: true });
+
 window.addEventListener('hashchange', route);
 // Re-draw the current screen after a save made from a shortcut or the command menu.
 window.addEventListener('mm:refresh', route);

@@ -82,7 +82,7 @@ export function historyList(entries, { showSummary = false } = {}) {
   }).join('')}</ol>`;
 }
 
-/** "Added by Juwel · 12 Oct, 3:40 pm · Edited by Rony · 12 Oct, 4:05 pm" */
+/** "Added by Karim · 12 Oct, 3:40 pm · Edited by Rahim · 12 Oct, 4:05 pm" */
 export function stampLine(rec, { added = 'Added' } = {}) {
   const parts = [];
   if (rec.createdBy) parts.push(`${added} by <strong>${esc(rec.createdBy)}</strong>${rec.createdAt ? ` · ${esc(when(rec.createdAt))}` : ''}`);

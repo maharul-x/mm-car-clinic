@@ -146,9 +146,9 @@ export async function renderOverview(view) {
             ${checks.map(c => `
               <li class="${c.done ? 'done' : ''}">
                 <a href="${c.href}">
-                  <span class="check" aria-hidden="true">${c.done ? '<svg viewBox="0 0 12 12"><path d="M2.5 6.2 5 8.5l4.5-5"/></svg>' : ''}</span>
-                  <span class="check-label">${esc(c.label)}<span class="sr">${c.done ? ' (done)' : ' (to do)'}</span></span>
-                  <span class="check-meta">${esc(c.meta)}</span>
+                  <span class="tick" aria-hidden="true">${c.done ? '<svg viewBox="0 0 12 12"><path d="M2.5 6.2 5 8.5l4.5-5"/></svg>' : ''}</span>
+                  <span class="tick-label">${esc(c.label)}<span class="sr">${c.done ? ' (done)' : ' (to do)'}</span></span>
+                  <span class="tick-meta">${esc(c.meta)}</span>
                 </a>
               </li>`).join('')}
           </ul>

@@ -1,7 +1,7 @@
 // In-browser stand-in for the Apps Script server, used by "Try the demo".
 // Data lives in this browser only. The sample data is made up.
 
-const KEY = 'mm.demo.v7';
+const KEY = 'mm.demo.v8';
 let db = null;
 
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
@@ -370,9 +370,9 @@ const strip = o => {
 function seedUsers() {
   const full = Object.fromEntries(SECTIONS.map(s => [s, 'edit']));
   return [
-    { id: 'u-admin', username: 'maharul', name: 'Maharul', password: 'demo1234', status: 'active', isAdmin: true, perms: full, createdAt: '2026-10-01T09:00:00', approvedBy: 'Sheet owner', lastLogin: localStamp() },
-    { id: 'u-juwel', username: 'juwel', name: 'Juwel', password: 'demo1234', status: 'active', isAdmin: false, perms: { cash: 'view', attendance: 'edit' }, createdAt: '2026-10-02T10:00:00', approvedBy: 'Maharul', lastLogin: '2026-10-11T18:20:00' },
-    { id: 'u-rony', username: 'rony', name: 'Rony', password: 'demo1234', status: 'pending', isAdmin: false, perms: {}, createdAt: '2026-10-12T08:45:00', approvedBy: '', lastLogin: '' },
+    { id: 'u-admin', username: 'owner', name: 'Owner', password: 'demo1234', status: 'active', isAdmin: true, perms: full, createdAt: '2026-10-01T09:00:00', approvedBy: 'Sheet owner', lastLogin: localStamp() },
+    { id: 'u-cashier', username: 'cashier', name: 'Cashier', password: 'demo1234', status: 'active', isAdmin: false, perms: { cash: 'view', attendance: 'edit' }, createdAt: '2026-10-02T10:00:00', approvedBy: 'Owner', lastLogin: '2026-10-11T18:20:00' },
+    { id: 'u-newstaff', username: 'newstaff', name: 'New Staff', password: 'demo1234', status: 'pending', isAdmin: false, perms: {}, createdAt: '2026-10-12T08:45:00', approvedBy: '', lastLogin: '' },
   ];
 }
 
@@ -382,17 +382,17 @@ function ensureAuth() {
   db.currentUserId = 'u-admin';
   db.audit = [];
   // Give the sample data an author, and one example edit so the history view has something to show.
-  db.txns.forEach((t, i) => { t.createdBy = i % 4 === 3 ? 'Juwel' : 'Maharul'; t.createdAt ||= `${t.date}T10:00:00`; });
+  db.txns.forEach((t, i) => { t.createdBy = i % 4 === 3 ? 'Cashier' : 'Owner'; t.createdAt ||= `${t.date}T10:00:00`; });
   const lunch = db.txns.find(t => t.description === 'LUNCH (FOOD)');
   if (lunch) {
     const before = { ...strip(lunch), amount: 560 };
-    lunch.updatedBy = 'Juwel';
+    lunch.updatedBy = 'Cashier';
     lunch.updatedAt = `${lunch.date}T14:05:00`;
     db.audit.push({ id: uid(), at: lunch.createdAt, user: lunch.createdBy, action: 'add', entity: 'Transactions', recordId: lunch.id, summary: `Cash out: ${lunch.description} ৳560`, before: null, after: before });
-    db.audit.push({ id: uid(), at: lunch.updatedAt, user: 'Juwel', action: 'edit', entity: 'Transactions', recordId: lunch.id, summary: `Cash out: ${lunch.description} ৳${lunch.amount}`, before, after: strip(lunch) });
+    db.audit.push({ id: uid(), at: lunch.updatedAt, user: 'Cashier', action: 'edit', entity: 'Transactions', recordId: lunch.id, summary: `Cash out: ${lunch.description} ৳${lunch.amount}`, before, after: strip(lunch) });
   }
-  db.attendance.forEach(a => { a.updatedBy ||= 'Juwel'; });
-  db.audit.push({ id: uid(), at: '2026-10-12T08:45:00', user: 'Rony', action: 'add', entity: 'Users', recordId: 'u-rony', summary: 'New user rony (waiting for approval)', before: null, after: { username: 'rony', name: 'Rony', status: 'pending' } });
+  db.attendance.forEach(a => { a.updatedBy ||= 'Cashier'; });
+  db.audit.push({ id: uid(), at: '2026-10-12T08:45:00', user: 'New Staff', action: 'add', entity: 'Users', recordId: 'u-newstaff', summary: 'New user newstaff (waiting for approval)', before: null, after: { username: 'newstaff', name: 'New Staff', status: 'pending' } });
 }
 
 const me = () => db.users.find(u => u.id === db.currentUserId) || db.users[0];

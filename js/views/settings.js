@@ -119,7 +119,7 @@ export function renderSettings(view) {
         <h2>This device</h2>
         <p class="muted">${isDemo() ? 'You are using the demo. Changes are saved in this browser only.' : 'Connected to your Google Sheet.'}</p>
         <div class="actions start">
-          ${isDemo() && !u.isAdmin ? '<button class="btn" id="demo-admin">Back to admin (Maharul)</button>' : ''}
+          ${isDemo() && !u.isAdmin ? '<button class="btn" id="demo-admin">Back to the admin account</button>' : ''}
           ${isDemo() ? '<button class="btn" id="reset-demo">Reset demo data</button>' : ''}
           <button class="btn danger ghost" id="signout">Sign out</button>
         </div>
@@ -154,7 +154,7 @@ export function renderSettings(view) {
     window.dispatchEvent(new Event('mm:refresh'));
   };
   view.querySelector('#demo-admin')?.addEventListener('click', () => {
-    demoSwitchUser('maharul');
+    demoSwitchUser('owner');
     state.meta = null;
     location.hash = '#/overview';
     window.dispatchEvent(new Event('mm:refresh'));

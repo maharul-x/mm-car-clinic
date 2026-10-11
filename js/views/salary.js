@@ -261,7 +261,7 @@ function renderSheet(view, month, data) {
         ${rows.length ? `
           <div class="table-wrap"><table class="table salary-table">
             <thead><tr>
-              <th>SL</th><th>Employee</th><th class="num">Basic</th><th class="num">Present</th><th class="num">Absent</th>
+              <th>SL</th><th>Employee</th><th class="num">Basic</th><th class="num">Present / Absent</th>
               <th class="num">Deduction</th><th class="num">Advance</th><th class="num">Net payable</th><th class="num">Paid</th><th class="num">Due</th>
               <th class="no-print"><span class="sr">Actions</span></th>
             </tr></thead>
@@ -271,21 +271,19 @@ function renderSheet(view, month, data) {
                 <td><strong>${esc(r.e.name)}</strong><small class="muted block">${esc(r.e.designation)}</small>
                   ${r.c.unmarked && r.e.trackAttendance ? `<span class="chip warn no-print" title="Counted as present">${r.c.unmarked} day${r.c.unmarked === 1 ? '' : 's'} not marked</span>` : ''}</td>
                 <td class="num">${fmt(r.e.basicSalary)}</td>
-                <td class="num">${r.e.trackAttendance ? r.present : '—'}</td>
-                <td class="num">${r.e.trackAttendance ? absentLabel(r.c) : '—'}</td>
+                <td class="num">${r.e.trackAttendance ? `${r.present} / ${absentLabel(r.c)}` : '<span class="muted">Not tracked</span>'}</td>
                 <td class="num">${r.deduction ? fmt(r.deduction) : '0'}</td>
                 <td class="num">${r.advance ? fmt(r.advance) : '0'}</td>
                 <td class="num"><strong>${fmt(r.net)}</strong></td>
-                <td class="num">${fmt(r.paid)}</td>
+                <td class="num"><button class="link" data-history="${esc(r.e.id)}" title="See payments">${fmt(r.paid)}${r.pays.length ? ` <small class="muted">(${r.pays.length})</small>` : ''}</button></td>
                 <td class="num ${r.due < 0 ? 'neg' : ''}">${r.due === 0 && r.net > 0 ? '<span class="status ok">Paid</span>' : fmt(r.due)}</td>
                 <td class="row-actions no-print">
-                  ${can('salary', 'edit') ? `<button class="btn small" data-pay="ADVANCE" data-id="${esc(r.e.id)}">+ Advance</button>
+                  ${can('salary', 'edit') ? `<button class="btn small" data-pay="ADVANCE" data-id="${esc(r.e.id)}">Advance</button>
                   <button class="btn small primary" data-pay="SALARY" data-id="${esc(r.e.id)}" ${r.due > 0 ? '' : 'disabled'}>Pay</button>` : ''}
-                  <button class="link" data-history="${esc(r.e.id)}">Payments${r.pays.length ? ` (${r.pays.length})` : ''}</button>
                 </td>
               </tr>`).join('')}</tbody>
             <tfoot><tr>
-              <td colspan="2">Total</td><td class="num">${fmt(sum(rows.map(r => r.e.basicSalary)))}</td><td></td><td></td>
+              <td colspan="2">Total</td><td class="num">${fmt(sum(rows.map(r => r.e.basicSalary)))}</td><td></td>
               <td class="num">${fmt(T('deduction'))}</td><td class="num">${fmt(T('advance'))}</td><td class="num">${fmt(T('net'))}</td>
               <td class="num">${fmt(T('paid'))}</td><td class="num">${fmt(T('due'))}</td><td class="no-print"></td>
             </tr></tfoot>

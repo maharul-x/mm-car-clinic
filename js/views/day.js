@@ -135,7 +135,7 @@ function card(label, value, kind = '', sub = '') {
   return `<div class="card ${kind}"><span>${label}</span><strong>${taka(value)}</strong>${sub ? `<small>${esc(sub)}</small>` : ''}</div>`;
 }
 
-/** "by Juwel" (or "by Juwel · edited by Rony") under an entry; hidden when printing. */
+/** "by Karim" (or "by Karim · edited by Rahim") under an entry; hidden when printing. */
 function byLine(t) {
   if (!t.createdBy && !t.updatedBy) return '';
   const who = [t.createdBy && `by ${esc(t.createdBy)}`, t.updatedBy && `edited by ${esc(t.updatedBy)}`].filter(Boolean).join(' · ');

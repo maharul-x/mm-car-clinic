@@ -111,7 +111,7 @@ function createAdmin() {
   };
   const username = ask('Create admin', 'Username (letters, numbers, . _ -):');
   if (username === null) return;
-  const name = ask('Create admin', 'Name shown on entries (e.g. Maharul):');
+  const name = ask('Create admin', 'Name shown on entries (e.g. Rahim):');
   if (name === null) return;
   const password = ask('Create admin', 'Password (at least 8 characters). It shows while you type, so make sure nobody is watching:');
   if (password === null) return;
@@ -1242,107 +1242,236 @@ function importSalarySheet() {
 // ───────────────────────────── Import old daily sheets ─────────────────────────────
 
 /**
- * Reads every tab laid out like the old "DAILY CASH FLOW LEDGER" sheets and
- * copies their rows into Transactions. Running it again replaces the earlier
- * import, so it is safe to repeat.
+ * Reads every tab laid out like the old "DAILY CASH FLOW LEDGER" sheets and copies their rows into
+ * Transactions. Running it again replaces the earlier import, so it is safe to repeat.
+ *
+ * Tabs named "Day1", "Day2", … take their date from the name (in the month of Day1's DATE cell),
+ * because copied templates often keep an old date in the DATE cell.
  */
 function importLegacySheets() {
   const ui = SpreadsheetApp.getUi();
   ensureTabs_();
-  const ss = SpreadsheetApp.getActive();
-  const tz = tz_();
-  const ours = Object.keys(TABS).map(k => TABS[k].name);
-  const s = readSettings_();
-  const cats = readCategories_();
-
-  const days = [];
-  ss.getSheets().forEach(sh => {
-    if (ours.indexOf(sh.getName()) >= 0) return;
-    const v = sh.getDataRange().getValues();
-    const isLedger = v.some(r => /DAILY CASH FLOW/i.test(String(r[0])));
-    const headRow = v.findIndex(r => String(r[0]).trim().toUpperCase() === 'SL');
-    const dateRow = v.findIndex(r => /^DATE/i.test(String(r[0]).trim()));
-    if (!isLedger || headRow < 0 || dateRow < 0) return;
-    const rawDate = v[dateRow].slice(1).find(c => c instanceof Date);
-    if (!rawDate) return;
-    const rows = [];
-    for (let i = headRow + 1; i < v.length && String(v[i][0]).trim().toUpperCase() !== 'TOTAL'; i++) rows.push(v[i]);
-    days.push({ sheet: sh.getName(), date: Utilities.formatDate(rawDate, tz, 'yyyy-MM-dd'), rows: rows });
-  });
-  if (!days.length) {
-    ui.alert('No daily ledger sheets were found.');
+  const plan = planLegacyImport_(readLegacyTabs_(), readSettings_(), readCategories_());
+  if (!plan.days.length) {
+    ui.alert('No daily ledger sheets with entries were found.');
     return;
   }
-  days.sort((a, b) => a.date.localeCompare(b.date));
-  const first = days[0].date;
-  const last = days[days.length - 1].date;
-
-  const methodOf = raw => {
-    const r = String(raw).trim();
-    if (!r) return s.methods[0];
-    const hit = s.methods.find(m => m.toLowerCase() === r.toLowerCase());
-    if (hit) return hit;
-    s.methods.push(r);
-    return r;
-  };
-  const categoryOf = (desc, type) => {
-    const m = desc.match(/\(([^()]+)\)\s*$/);
-    if (!m) return type === 'IN' ? 'Customer Payment' : 'Uncategorized';
-    const raw = m[1].trim();
-    const hit = cats[type].find(c => c.toLowerCase() === raw.toLowerCase());
-    if (hit) return hit;
-    const name = raw.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-    cats[type].push(name);
-    return name;
-  };
-
-  const opening = {};
-  const txns = [];
-  const now = new Date();
-  days.forEach(d => d.rows.forEach(r => {
-    [['IN', 1], ['OUT', 7]].forEach(spec => {
-      const type = spec[0], c = spec[1];
-      const desc = String(r[c + 1]).trim();
-      const amount = Number(r[c + 2]);
-      if (!(amount > 0)) return;
-      const method = methodOf(r[c + 3]);
-      if (type === 'IN' && /^OPENING\b/i.test(desc)) {
-        // Opening balances become settings, not income. Later days' opening rows are carried forward automatically.
-        if (d.date === first) opening[method] = (opening[method] || 0) + amount;
-        return;
-      }
-      txns.push({
-        id: Utilities.getUuid(), date: d.date, type: type, invoice: String(r[c]).trim(), description: desc || '(no description)',
-        category: categoryOf(desc, type), amount: amount, method: method, toMethod: '', note: '',
-        source: 'legacy:' + d.sheet, createdAt: now, updatedAt: now, createdBy: 'Old sheet import', updatedBy: '',
-      });
-    });
-  }));
-
-  const ok = ui.alert(
-    'Import old daily sheets',
-    'Found ' + days.length + ' daily sheet(s) from ' + first + ' to ' + last + ' with ' + txns.length + ' entries.\n\n' +
-    'This replaces anything imported before (entries added in the app are kept) and sets the opening balances for ' + first + '. Continue?',
-    ui.ButtonSet.YES_NO);
+  const lines = [
+    'Found ' + plan.days.length + ' day(s) with entries, ' + plan.first + ' to ' + plan.last + ': ' + plan.txns.length + ' entries' +
+      (plan.transfers ? ' (including ' + plan.transfers + ' transfer(s) between accounts)' : '') + '.',
+  ];
+  if (plan.dateFixes.length) lines.push('\nDates taken from the tab name (the DATE cell said otherwise): ' + plan.dateFixes.join(', ') + '.');
+  if (plan.skipped.length) lines.push('\nSkipped because there is no amount:\n• ' + plan.skipped.slice(0, 12).join('\n• ') + (plan.skipped.length > 12 ? '\n• …and ' + (plan.skipped.length - 12) + ' more' : ''));
+  if (plan.mismatches.length) lines.push('\nTotals that don\'t match the sheet\'s TOTAL row:\n• ' + plan.mismatches.join('\n• '));
+  lines.push('\nUncategorized entries: ' + plan.uncategorized + ' (you can fix these later in the app).');
+  lines.push('\nThis replaces anything imported before (entries added in the app are kept) and sets the opening balances for ' + plan.first + '. Continue?');
+  const ok = ui.alert('Import old daily sheets', lines.join('\n'), ui.ButtonSet.YES_NO);
   if (ok !== ui.Button.YES) return;
 
   withLock_(() => {
     const H = TABS.TXN.headers;
     const sh = sheet_(TABS.TXN);
     const keep = readRows_(TABS.TXN).filter(r => String(r.source).indexOf('legacy:') !== 0);
-    const rows = keep.concat(txns).map(t => toRow_(TABS.TXN, t));
+    const rows = keep.concat(plan.txns).map(t => toRow_(TABS.TXN, t));
     const n = sh.getLastRow();
     if (n > 1) sh.getRange(2, 1, n - 1, H.length).clearContent();
     if (rows.length) sh.getRange(2, 1, rows.length, H.length).setValues(rows);
 
-    const settings = { startDate: first, methods: s.methods };
-    Object.keys(opening).forEach(m => { settings['opening_' + m] = opening[m]; });
+    const settings = { startDate: plan.first, methods: plan.methods };
+    Object.keys(plan.opening).forEach(m => { settings['opening_' + m] = plan.opening[m]; });
     ACTOR = { id: '', name: 'Old sheet import' };
     saveSettings_(settings);
-    saveCategories_(cats);
-    audit_('add', 'Transactions', 'import', 'Imported ' + txns.length + ' entries from ' + days.length + ' old daily sheet(s), ' + first + ' to ' + last, null, null);
+    saveCategories_(plan.categories);
+    audit_('add', 'Transactions', 'import', 'Imported ' + plan.txns.length + ' entries from ' + plan.days.length + ' old daily sheet(s), ' + plan.first + ' to ' + plan.last, null, null);
   });
-  ui.alert('Imported ' + txns.length + ' entries from ' + days.length + ' sheet(s). Your old sheets were not changed.');
+  ui.alert('Imported ' + plan.txns.length + ' entries. Your old sheets were not changed.');
+}
+
+/** Raw rows of every old-style ledger tab: { sheet, cellDate, rows, totalIn, totalOut }. */
+function readLegacyTabs_() {
+  const tz = tz_();
+  const ours = Object.keys(TABS).map(k => TABS[k].name);
+  const tabs = [];
+  SpreadsheetApp.getActive().getSheets().forEach(sh => {
+    if (ours.indexOf(sh.getName()) >= 0) return;
+    const v = sh.getDataRange().getValues();
+    if (!v.some(r => /DAILY CASH FLOW/i.test(String(r[0])))) return;
+    const headRow = v.findIndex(r => String(r[0]).trim().toUpperCase() === 'SL');
+    const dateRow = v.findIndex(r => /^DATE/i.test(String(r[0]).trim()));
+    if (headRow < 0) return;
+    const rawDate = dateRow >= 0 ? v[dateRow].slice(1).find(c => c instanceof Date) : null;
+    const rows = [];
+    let i = headRow + 1;
+    for (; i < v.length && String(v[i][0]).trim().toUpperCase() !== 'TOTAL'; i++) rows.push(v[i]);
+    const total = v[i] || [];
+    tabs.push({
+      sheet: sh.getName(),
+      cellDate: rawDate ? Utilities.formatDate(rawDate, tz, 'yyyy-MM-dd') : '',
+      rows: rows,
+      totalIn: Number(total[3]) || 0,
+      totalOut: Number(total[9]) || 0,
+    });
+  });
+  return tabs;
+}
+
+/**
+ * Turns raw ledger tabs into transactions. Pure: no sheet access, so it can be tested.
+ * Columns: cash in B–E (invoice, description, amount, method), cash out H–K.
+ */
+function planLegacyImport_(tabs, s, catsIn) {
+  const cats = { IN: catsIn.IN.slice(), OUT: catsIn.OUT.slice() };
+  const methods = s.methods.slice();
+  const dayNo = name => {
+    const m = String(name).match(/^\s*day\s*0?(\d{1,2})\s*$/i);
+    return m ? Number(m[1]) : 0;
+  };
+  // Month for "DayN" tabs: from Day1's DATE cell, else the most common month among DATE cells.
+  const day1 = tabs.find(t => dayNo(t.sheet) === 1 && t.cellDate);
+  const months = {};
+  tabs.forEach(t => { if (t.cellDate) months[t.cellDate.slice(0, 7)] = (months[t.cellDate.slice(0, 7)] || 0) + 1; });
+  const anchor = day1 ? day1.cellDate.slice(0, 7) : Object.keys(months).sort((a, b) => months[b] - months[a])[0];
+  const dateFixes = [];
+  const dated = tabs.map(t => {
+    const n = dayNo(t.sheet);
+    let date = t.cellDate;
+    if (n && anchor) {
+      const lastDay = new Date(Number(anchor.slice(0, 4)), Number(anchor.slice(5, 7)), 0).getDate();
+      if (n <= lastDay) {
+        date = anchor + '-' + String(n).padStart(2, '0');
+        if (t.cellDate && t.cellDate !== date) dateFixes.push(t.sheet + ' → ' + date);
+      }
+    }
+    return Object.assign({}, t, { date: date });
+  }).filter(t => t.date);
+
+  const methodOf = raw => {
+    const r = String(raw).trim();
+    if (!r) return methods[0];
+    const hit = methods.find(m => m.toLowerCase() === r.toLowerCase());
+    if (hit) return hit;
+    methods.push(r);
+    return r;
+  };
+
+  const opening = {};
+  const txns = [];
+  const skipped = [];
+  const mismatches = [];
+  const usedDays = {};
+  let transfers = 0;
+  const now = new Date();
+  const first = dated.map(t => t.date).sort()[0];
+
+  dated.sort((a, b) => a.date.localeCompare(b.date) || a.sheet.localeCompare(b.sheet)).forEach(d => {
+    const day = [];
+    let sumIn = 0, sumOut = 0;
+    d.rows.forEach(r => {
+      [['IN', 1], ['OUT', 7]].forEach(spec => {
+        const type = spec[0], c = spec[1];
+        const desc = String(r[c + 1] === undefined ? '' : r[c + 1]).trim();
+        const amount = Number(r[c + 2]);
+        if (!(amount > 0)) {
+          if (desc && !/^friday$/i.test(desc)) skipped.push(d.sheet + ': ' + desc);
+          return;
+        }
+        if (type === 'IN') sumIn += amount; else sumOut += amount;
+        const method = methodOf(r[c + 3]);
+        if (type === 'IN' && /^OPENING\b/i.test(desc)) {
+          // Opening balances become settings, not income; later days carry forward automatically.
+          if (d.date === first) opening[method] = (opening[method] || 0) + amount;
+          return;
+        }
+        day.push({ type: type, invoice: String(r[c] === undefined ? '' : r[c]).trim(), desc: desc, amount: amount, method: method });
+      });
+    });
+    if (d.totalIn && Math.abs(d.totalIn - sumIn) > 0.5) mismatches.push(d.sheet + ' cash in: sheet says ' + d.totalIn + ', rows add up to ' + sumIn);
+    if (d.totalOut && Math.abs(d.totalOut - sumOut) > 0.5) mismatches.push(d.sheet + ' cash out: sheet says ' + d.totalOut + ', rows add up to ' + sumOut);
+
+    // "BKASH TO CASH" written once as cash out (from bKash) and once as cash in (to cash) is a transfer.
+    const done = {};
+    day.forEach((e, i) => {
+      if (done[i] || e.type !== 'OUT') return;
+      const m = e.desc.match(/^\s*(\w+)\s+TO\s+(\w+)\s*$/i);
+      if (!m) return;
+      const from = methods.find(x => x.toLowerCase() === m[1].toLowerCase());
+      const to = methods.find(x => x.toLowerCase() === m[2].toLowerCase());
+      if (!from || !to || from === to || e.method !== from) return;
+      const j = day.findIndex((x, k) => !done[k] && k !== i && x.type === 'IN' && x.amount === e.amount && x.method === to &&
+        x.desc.replace(/\s+/g, ' ').toUpperCase() === e.desc.replace(/\s+/g, ' ').toUpperCase());
+      if (j < 0) return;
+      done[i] = done[j] = true;
+      transfers++;
+      txns.push(legacyTxn_(d, { type: 'TRANSFER', invoice: '', desc: from + ' → ' + to, amount: e.amount, method: from, toMethod: to, category: 'Transfer' }, now));
+    });
+    day.forEach((e, i) => {
+      if (done[i]) return;
+      txns.push(legacyTxn_(d, Object.assign({}, e, { toMethod: '', category: legacyCategory_(e.desc, e.type, cats) }), now));
+    });
+    if (day.length) usedDays[d.date] = true;
+  });
+
+  const dayList = Object.keys(usedDays).sort();
+  return {
+    days: dayList, first: first, last: dayList[dayList.length - 1], txns: txns, opening: opening, methods: methods,
+    categories: cats, dateFixes: dateFixes, skipped: skipped, mismatches: mismatches, transfers: transfers,
+    uncategorized: txns.filter(t => t.category === 'Uncategorized').length,
+  };
+}
+
+function legacyTxn_(d, e, now) {
+  return {
+    id: Utilities.getUuid(), date: d.date, type: e.type, invoice: e.invoice, description: e.desc || '(no description)',
+    category: e.category, amount: e.amount, method: e.method, toMethod: e.toMethod || '', note: '',
+    source: 'legacy:' + d.sheet, createdAt: now, updatedAt: now, createdBy: 'Old sheet import', updatedBy: '',
+  };
+}
+
+/**
+ * Category from an old description. Looks at every "(…)" in it, e.g. "MOBILE RECHARGE (UTILITY) - STAFF",
+ * tolerating small typos ("(WORSHOP)", "(WORKSHOPO)"). New single-word labels become new categories.
+ * `cats` is updated in place when a new category is created.
+ */
+function legacyCategory_(desc, type, cats) {
+  const list = cats[type];
+  const norm = x => String(x).toUpperCase().replace(/[^A-Z]/g, '');
+  const groups = (String(desc).match(/\(([^()]*)\)/g) || []).map(g => g.slice(1, -1).trim());
+  for (let i = 0; i < groups.length; i++) {
+    const g = norm(groups[i]);
+    if (g.length < 3) continue;
+    const hit = list.find(c => {
+      const n = norm(c);
+      return n === g || (g.length >= 5 && (n.indexOf(g) === 0 || g.indexOf(n) === 0)) || (g.length >= 5 && editDistance_(n, g) <= 2);
+    });
+    if (hit) return hit;
+  }
+  if (type === 'OUT') {
+    const fresh = groups.find(g => /^[A-Za-z]{3,20}$/.test(g));
+    if (fresh) {
+      const name = fresh.charAt(0).toUpperCase() + fresh.slice(1).toLowerCase();
+      list.push(name);
+      return name;
+    }
+    const d = String(desc).toUpperCase();
+    const pick = name => list.find(c => c.toLowerCase() === name.toLowerCase());
+    if (/COMMIS/.test(d) && pick('Commission')) return pick('Commission');
+    if (/\b(LUNCH|NASTA|TEA|COFFE+|BISCUIT|SNACKS?)\b/.test(d) && pick('Food')) return pick('Food');
+    if (/\bDAY WORK\b/.test(d) && pick('Salary')) return pick('Salary');
+    return 'Uncategorized';
+  }
+  return list.indexOf('Customer Payment') >= 0 ? 'Customer Payment' : list[0];
+}
+
+function editDistance_(a, b) {
+  const dp = [];
+  for (let i = 0; i <= a.length; i++) dp.push([i]);
+  for (let j = 1; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+  }
+  return dp[a.length][b.length];
 }
 
 // ───────────────────────────── Helpers ─────────────────────────────
