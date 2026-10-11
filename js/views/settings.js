@@ -1,6 +1,6 @@
-import { call, clearSession, isDemo } from '../api.js';
-import { resetDemo } from '../mock.js';
-import { loadMeta, methodLabel, state } from '../state.js';
+import { call, isDemo, signOut } from '../api.js';
+import { demoSwitchUser, resetDemo } from '../mock.js';
+import { can, loadMeta, methodLabel, state } from '../state.js';
 import { confirmDialog, esc, formError, submitting, toast } from '../util.js';
 import { getTheme, setTheme, THEMES } from '../theme.js';
 
@@ -12,10 +12,48 @@ export function renderSettings(view) {
     renderSettings(view);
   };
 
+  const u = state.user;
+  const showBiz = can('settings', 'view');
+  const readOnly = !can('settings', 'edit');
+
   view.innerHTML = `
     <section class="page settings">
-      <h1 class="page-title">Settings</h1>
+      <header class="page-head">
+        <p class="eyebrow">Settings</p>
+        <h1 class="page-title">${showBiz ? 'Settings' : 'Your account'}</h1>
+      </header>
 
+      <div class="panel">
+        <h2>Your account</h2>
+        <div class="account-row">
+          <span class="avatar lg" aria-hidden="true">${esc((u.name || u.username || '?').charAt(0).toUpperCase())}</span>
+          <div><strong>${esc(u.name)}</strong><p class="muted small">@${esc(u.username)} · ${u.isAdmin ? 'Admin' : 'Staff'}</p></div>
+        </div>
+        ${isDemo() ? '' : `
+        <form class="form" id="password" novalidate>
+          <h3>Change password</h3>
+          <div class="grid3">
+            <label>Current password<input name="oldPassword" type="password" autocomplete="current-password" required></label>
+            <label>New password<input name="newPassword" type="password" autocomplete="new-password" minlength="8" required></label>
+            <label>Confirm new password<input name="confirm" type="password" autocomplete="new-password" required></label>
+          </div>
+          <p class="form-error" hidden></p>
+          <div class="actions"><button class="btn">Change password</button></div>
+        </form>`}
+      </div>
+
+      ${u.isAdmin ? `
+      <div class="panel admin-links">
+        <h2>Admin</h2>
+        <div class="actions start">
+          <a class="btn" href="#/users">Users &amp; access</a>
+          <a class="btn" href="#/activity">Activity log</a>
+        </div>
+      </div>` : ''}
+
+      ${showBiz ? `
+      ${readOnly ? '<p class="chip">View only: ask the admin to change these settings.</p>' : ''}
+      <div class="biz">
       <form class="panel form" id="balances" novalidate>
         <h2>Starting balances</h2>
         <p class="muted">The balance in each account at the start of the first day you track. Every later day's opening balance is worked out from this automatically.</p>
@@ -67,6 +105,7 @@ export function renderSettings(view) {
         <p class="form-error" hidden></p>
         <div class="actions"><button class="btn primary">Save details</button></div>
       </form>
+      </div>` : ''}
 
       <div class="panel">
         <h2>Appearance</h2>
@@ -80,6 +119,7 @@ export function renderSettings(view) {
         <h2>This device</h2>
         <p class="muted">${isDemo() ? 'You are using the demo. Changes are saved in this browser only.' : 'Connected to your Google Sheet.'}</p>
         <div class="actions start">
+          ${isDemo() && !u.isAdmin ? '<button class="btn" id="demo-admin">Back to admin (Maharul)</button>' : ''}
           ${isDemo() ? '<button class="btn" id="reset-demo">Reset demo data</button>' : ''}
           <button class="btn danger ghost" id="signout">Sign out</button>
         </div>
@@ -92,6 +132,46 @@ export function renderSettings(view) {
       view.querySelectorAll('[data-theme-pick]').forEach(x => x.setAttribute('aria-checked', String(x === b)));
     };
   });
+
+  const pw = view.querySelector('#password');
+  pw?.addEventListener('submit', async e => {
+    e.preventDefault();
+    const v = Object.fromEntries(new FormData(pw));
+    if (v.newPassword.length < 8) return formError(pw, 'The new password must be at least 8 characters.');
+    if (v.newPassword !== v.confirm) return formError(pw, 'The two new passwords don’t match.');
+    const ok = await submitting(pw, () => call('changePassword', { oldPassword: v.oldPassword, newPassword: v.newPassword }));
+    if (!ok) return;
+    toast('Password changed. Please sign in again.');
+    await signOut();
+    location.hash = '#/overview';
+    window.dispatchEvent(new Event('mm:refresh'));
+  });
+
+  view.querySelector('#signout').onclick = async () => {
+    if (!(await confirmDialog('Sign out on this device?', { okLabel: 'Sign out', danger: false }))) return;
+    await signOut();
+    location.hash = '#/overview';
+    window.dispatchEvent(new Event('mm:refresh'));
+  };
+  view.querySelector('#demo-admin')?.addEventListener('click', () => {
+    demoSwitchUser('maharul');
+    state.meta = null;
+    location.hash = '#/overview';
+    window.dispatchEvent(new Event('mm:refresh'));
+  });
+  view.querySelector('#reset-demo')?.addEventListener('click', async () => {
+    if (!(await confirmDialog('Reset the demo back to the sample data?', { okLabel: 'Reset' }))) return;
+    resetDemo();
+    toast('Demo data reset');
+    refresh();
+  });
+
+  if (!showBiz) return;
+  if (readOnly) {
+    // Show the values but make every control inert.
+    view.querySelectorAll('.biz input, .biz select, .biz button').forEach(el => { el.disabled = true; });
+    view.querySelectorAll('.biz .actions, .biz .inline-add').forEach(el => { el.hidden = true; });
+  }
 
   const balances = view.querySelector('#balances');
   balances.addEventListener('submit', async e => {
@@ -126,7 +206,7 @@ export function renderSettings(view) {
   const catBox = view.querySelector('#cats');
   const drawChips = type => {
     catBox.querySelector(`[data-chips="${type}"]`).innerHTML = cats[type]
-      .map((c, i) => `<li class="tag">${esc(c)}<button type="button" aria-label="Remove ${esc(c)}" data-remove="${type}:${i}">×</button></li>`)
+      .map((c, i) => `<li class="tag">${esc(c)}${readOnly ? '' : `<button type="button" aria-label="Remove ${esc(c)}" data-remove="${type}:${i}">×</button>`}</li>`)
       .join('');
   };
   ['IN', 'OUT'].forEach(drawChips);
@@ -163,18 +243,6 @@ export function renderSettings(view) {
     }
   };
 
-  view.querySelector('#signout').onclick = async () => {
-    if (!(await confirmDialog('Sign out on this device?', { okLabel: 'Sign out', danger: false }))) return;
-    clearSession();
-    location.hash = '#/day';
-    location.reload();
-  };
-  view.querySelector('#reset-demo')?.addEventListener('click', async () => {
-    if (!(await confirmDialog('Reset the demo back to the sample data?', { okLabel: 'Reset' }))) return;
-    resetDemo();
-    toast('Demo data reset');
-    refresh();
-  });
 }
 
 function catEditor(type, title, list) {

@@ -1,6 +1,7 @@
 import { call } from '../api.js';
-import { categories, methodLabel, methods } from '../state.js';
+import { can, categories, methodLabel, methods } from '../state.js';
 import { confirmDialog, esc, fmt, formError, loading, openModal, options, prettyDate, submitting, sum, taka, toast, todayISO } from '../util.js';
+import { loadHistory } from './history.js';
 
 const UNITS = ['pcs', 'set', 'litre', 'can', 'box', 'kg', 'metre', 'pair'];
 const MOVE_LABEL = { IN: 'Stock in', OUT: 'Stock out', ADJUST: 'Adjustment' };
@@ -9,6 +10,7 @@ export async function renderInventory(view) {
   view.innerHTML = loading();
   const items = (await call('inventory')).filter(i => i.active).sort((a, b) => a.name.localeCompare(b.name));
   const refresh = () => renderInventory(view);
+  const edit = can('inventory', 'edit');
   const status = i => (i.qty <= 0 ? 'out' : i.qty <= i.reorderLevel ? 'low' : 'ok');
   const low = items.filter(i => status(i) !== 'ok');
   const stockValue = sum(items.map(i => Math.max(i.qty, 0) * i.costPrice));
@@ -18,7 +20,7 @@ export async function renderInventory(view) {
       <div class="toolbar">
         <input type="search" id="q" placeholder="Search name, SKU or category" aria-label="Search items">
         <div class="toolbar-actions">
-          <button class="btn primary" id="new">+ New item</button>
+          ${edit ? '<button class="btn primary" id="new">+ New item</button>' : '<span class="chip">View only</span>'}
         </div>
       </div>
       <h1 class="page-title">Inventory</h1>
@@ -58,24 +60,24 @@ export async function renderInventory(view) {
           <td class="num">${fmt(i.salePrice)}</td>
           <td><span class="status ${st}">${st === 'out' ? 'Out of stock' : st === 'low' ? 'Low' : 'OK'}</span></td>
           <td class="row-actions">
-            <button class="btn small in" data-move="IN" data-id="${esc(i.id)}">+ In</button>
-            <button class="btn small out" data-move="OUT" data-id="${esc(i.id)}">− Out</button>
+            ${edit ? `<button class="btn small in" data-move="IN" data-id="${esc(i.id)}">In</button>
+            <button class="btn small out" data-move="OUT" data-id="${esc(i.id)}">Out</button>` : ''}
             <button class="link" data-history="${esc(i.id)}">History</button>
-            <button class="link" data-edit="${esc(i.id)}">Edit</button>
+            ${edit ? `<button class="link" data-edit="${esc(i.id)}">Edit</button>` : ''}
           </td>
         </tr>`;
     }).join('');
   };
   draw('');
   view.querySelector('#q').oninput = e => draw(e.target.value);
-  view.querySelector('#new').onclick = () => openItemForm({ items, onSaved: refresh });
+  view.querySelector('#new')?.addEventListener('click', () => openItemForm({ items, onSaved: refresh }));
 
   const byId = new Map(items.map(i => [i.id, i]));
   view.onclick = e => {
     const b = e.target.closest('[data-move], [data-history], [data-edit]');
     if (!b) return;
     if (b.dataset.move) openMoveForm({ item: byId.get(b.dataset.id), type: b.dataset.move, onSaved: refresh });
-    else if (b.dataset.history) openHistory({ item: byId.get(b.dataset.history), onChanged: refresh });
+    else if (b.dataset.history) openHistory({ item: byId.get(b.dataset.history), onChanged: refresh, edit });
     else openItemForm({ item: byId.get(b.dataset.edit), items, onSaved: refresh });
   };
 }
@@ -205,14 +207,26 @@ function openMoveForm({ item, type, onSaved }) {
   });
 }
 
-async function openHistory({ item, onChanged }) {
-  const m = openModal({ title: `History: ${item.name}`, wide: true, body: loading() });
-  const body = m.el.querySelector('.modal-body');
+async function openHistory({ item, onChanged, edit }) {
+  const m = openModal({
+    title: `History: ${item.name}`,
+    wide: true,
+    body: `<div class="moves">${loading()}</div>
+      <details class="history-box"><summary>All changes to this item</summary><div class="h-body"></div></details>`,
+  });
+  const body = m.el.querySelector('.moves');
+  const box = m.el.querySelector('.history-box');
+  box.addEventListener('toggle', () => {
+    if (box.open && !box.dataset.loaded) {
+      box.dataset.loaded = '1';
+      loadHistory(box.querySelector('.h-body'), 'Inventory', item.id);
+    }
+  });
   const draw = async () => {
     const moves = await call('moves', { itemId: item.id });
     body.innerHTML = moves.length ? `
       <div class="table-wrap"><table class="table">
-        <thead><tr><th>Date</th><th>Type</th><th class="num">Qty</th><th class="num">Unit price</th><th>Reference / note</th><th><span class="sr">Actions</span></th></tr></thead>
+        <thead><tr><th>Date</th><th>Type</th><th class="num">Qty</th><th class="num">Unit price</th><th>Reference / note</th><th>By</th><th><span class="sr">Actions</span></th></tr></thead>
         <tbody>${moves.map(mv => `
           <tr>
             <td class="nowrap">${esc(prettyDate(mv.date, { day: 'numeric', month: 'short', year: 'numeric' }))}</td>
@@ -220,7 +234,8 @@ async function openHistory({ item, onChanged }) {
             <td class="num">${mv.type === 'OUT' ? '−' : mv.qty > 0 ? '+' : ''}${fmt(mv.qty)}</td>
             <td class="num">${fmt(mv.unitPrice)}</td>
             <td>${esc([mv.reference, mv.note].filter(Boolean).join(' · '))}</td>
-            <td class="row-actions"><button class="link danger" data-del-move="${esc(mv.id)}">Delete</button></td>
+            <td class="muted">${esc(mv.createdBy || '—')}</td>
+            <td class="row-actions">${edit ? `<button class="link danger" data-del-move="${esc(mv.id)}">Delete</button>` : ''}</td>
           </tr>`).join('')}</tbody>
       </table></div>` : '<p class="empty">No stock movements yet.</p>';
   };

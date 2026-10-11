@@ -1,5 +1,5 @@
 import { hasSession } from './api.js';
-import { state } from './state.js';
+import { can, isAdmin, state } from './state.js';
 import { esc, openModal, todayISO } from './util.js';
 import { openTxnForm } from './views/txnForm.js';
 import { setTheme } from './theme.js';
@@ -10,26 +10,31 @@ const add = type => () => openTxnForm({ type, date: todayISO(), onSaved: () => w
 /** Every command in the app. `keys` are single keys pressed outside text fields; "Mod" is ⌘ on Mac, Ctrl elsewhere. */
 export const SHORTCUTS = [
   { id: 'menu', label: 'Open command menu', keys: ['Mod', 'K'], showOnOverview: true, run: () => openCommandMenu() },
-  { id: 'in', label: 'New cash in', keys: ['I'], showOnOverview: true, run: add('IN') },
-  { id: 'out', label: 'New cash out', keys: ['O'], showOnOverview: true, run: add('OUT') },
-  { id: 'transfer', label: 'Move money between accounts', keys: ['T'], run: add('TRANSFER') },
+  { id: 'in', label: 'New cash in', keys: ['I'], showOnOverview: true, allowed: () => can('cash', 'edit'), run: add('IN') },
+  { id: 'out', label: 'New cash out', keys: ['O'], showOnOverview: true, allowed: () => can('cash', 'edit'), run: add('OUT') },
+  { id: 'transfer', label: 'Move money between accounts', keys: ['T'], allowed: () => can('cash', 'edit'), run: add('TRANSFER') },
   { id: 'overview', label: 'Go to Overview', keys: ['G', 'H'], run: go('#/overview') },
-  { id: 'day', label: 'Go to Daily ledger', keys: ['G', 'D'], showOnOverview: true, run: go('#/day') },
-  { id: 'month', label: 'Go to Monthly report', keys: ['G', 'M'], run: go('#/month') },
-  { id: 'inventory', label: 'Go to Inventory', keys: ['G', 'I'], run: go('#/inventory') },
-  { id: 'attendance', label: 'Go to Attendance', keys: ['G', 'A'], showOnOverview: true, run: go('#/salary/attendance') },
-  { id: 'sheet', label: 'Go to Salary sheet', keys: ['G', 'S'], run: go('#/salary/sheet') },
-  { id: 'employees', label: 'Go to Employees', keys: ['G', 'E'], run: go('#/salary/employees') },
+  { id: 'day', label: 'Go to Daily ledger', keys: ['G', 'D'], showOnOverview: true, allowed: () => can('cash'), run: go('#/day') },
+  { id: 'month', label: 'Go to Monthly report', keys: ['G', 'M'], allowed: () => can('report'), run: go('#/month') },
+  { id: 'inventory', label: 'Go to Inventory', keys: ['G', 'I'], allowed: () => can('inventory'), run: go('#/inventory') },
+  { id: 'attendance', label: 'Go to Attendance', keys: ['G', 'A'], showOnOverview: true, allowed: () => can('attendance'), run: go('#/salary/attendance') },
+  { id: 'sheet', label: 'Go to Salary sheet', keys: ['G', 'S'], allowed: () => can('salary'), run: go('#/salary/sheet') },
+  { id: 'employees', label: 'Go to Employees', keys: ['G', 'E'], allowed: () => can('employees'), run: go('#/salary/employees') },
+  { id: 'users', label: 'Go to Users & access', keys: ['G', 'U'], allowed: isAdmin, run: go('#/users') },
+  { id: 'activity', label: 'Go to Activity log', keys: ['G', 'L'], allowed: isAdmin, run: go('#/activity') },
   { id: 'settings', label: 'Go to Settings', keys: ['G', ','], run: go('#/settings') },
   { id: 'theme-dark', label: 'Theme: Dark', keys: [], run: () => setTheme('dark') },
   { id: 'theme-light', label: 'Theme: Light', keys: [], run: () => setTheme('light') },
   { id: 'theme-system', label: 'Theme: Match device', keys: [], run: () => setTheme('system') },
 ];
 
+/** Shortcuts this user is allowed to use. */
+export const available = () => SHORTCUTS.filter(s => !s.allowed || s.allowed());
+
 export const modKey = () => (/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl');
 
 export function runShortcut(id) {
-  SHORTCUTS.find(s => s.id === id)?.run();
+  available().find(s => s.id === id)?.run();
 }
 
 const ready = () => hasSession() && !!state.meta;
@@ -48,7 +53,7 @@ export function installShortcuts() {
     const key = e.key.toUpperCase();
     if (Date.now() - pendingG < 1200) {
       pendingG = 0;
-      const hit = SHORTCUTS.find(s => s.keys.length === 2 && s.keys[0] === 'G' && s.keys[1] === key);
+      const hit = available().find(s => s.keys.length === 2 && s.keys[0] === 'G' && s.keys[1] === key);
       if (hit) {
         e.preventDefault();
         hit.run();
@@ -59,7 +64,7 @@ export function installShortcuts() {
       pendingG = Date.now();
       return;
     }
-    const hit = SHORTCUTS.find(s => s.keys.length === 1 && s.keys[0] === key);
+    const hit = available().find(s => s.keys.length === 1 && s.keys[0] === key);
     if (hit) {
       e.preventDefault();
       hit.run();
@@ -81,7 +86,7 @@ export function openCommandMenu() {
   m.el.querySelector('.modal').classList.add('cmdk-modal');
   const input = m.el.querySelector('.cmdk-input');
   const list = m.el.querySelector('.cmdk-list');
-  const all = SHORTCUTS.filter(s => s.id !== 'menu');
+  const all = available().filter(s => s.id !== 'menu');
   let shown = all;
   let active = 0;
   const draw = () => {

@@ -12,22 +12,28 @@ export class ApiError extends Error {
   }
 }
 
+// A session is { url, token, user } once signed in. `url` is 'demo' for the in-browser demo.
+let memory = null;
+
 export function getSession() {
+  if (memory) return memory;
   for (const store of [localStorage, sessionStorage]) {
     try {
       const s = JSON.parse(store.getItem(KEY) || 'null');
-      if (s && s.url) return s;
+      if (s && s.url && (s.token || s.url === 'demo')) return (memory = s);
     } catch { /* storage blocked */ }
   }
   return null;
 }
 
-export function saveSession(session, remember) {
+let remembered = true;
+export function saveSession(session, remember = remembered) {
+  remembered = remember;
   clearSession();
+  memory = session;
   try {
     (remember ? localStorage : sessionStorage).setItem(KEY, JSON.stringify(session));
   } catch { /* storage blocked: session lasts until reload */ }
-  memory = session;
 }
 
 export function clearSession() {
@@ -37,17 +43,18 @@ export function clearSession() {
   }
 }
 
-let memory = null;
-export const hasSession = () => !!(memory || getSession());
-export const isDemo = () => (memory || getSession())?.url === 'demo';
+export const hasSession = () => !!getSession();
+export const isDemo = () => getSession()?.url === 'demo';
 
-export async function call(action, params = {}, session = memory || getSession()) {
+/** Calls the server. Pass `server` to call before signing in (login, sign-up). */
+export async function call(action, params = {}, server = null) {
+  const session = server ? { url: server } : getSession();
   if (!session) throw new ApiError('Please sign in.', 'AUTH');
   if (session.url === 'demo') {
     try {
       return await mockCall(action, params);
     } catch (e) {
-      throw new ApiError(e.message);
+      throw new ApiError(e.message, e.code);
     }
   }
   let res;
@@ -56,7 +63,7 @@ export async function call(action, params = {}, session = memory || getSession()
       method: 'POST',
       // text/plain avoids a CORS preflight, which Apps Script cannot answer.
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ ...params, action, pin: session.pin }),
+      body: JSON.stringify({ ...params, action, token: session.token }),
     });
   } catch {
     throw new ApiError('Could not reach the server. Check your internet connection.', 'NETWORK');
@@ -69,4 +76,9 @@ export async function call(action, params = {}, session = memory || getSession()
   }
   if (!body.ok) throw new ApiError(body.error || 'Request failed.', body.code);
   return body.data;
+}
+
+export async function signOut() {
+  try { await call('logout'); } catch { /* already signed out */ }
+  clearSession();
 }

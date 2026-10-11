@@ -1,5 +1,5 @@
-import { clearSession, hasSession, isDemo } from './api.js';
-import { loadMeta, state } from './state.js';
+import { clearSession, hasSession, isDemo, signOut } from './api.js';
+import { can, isAdmin, loadMeta, state } from './state.js';
 import { esc, guard, loading } from './util.js';
 import { renderDay } from './views/day.js';
 import { renderInventory } from './views/inventory.js';
@@ -10,8 +10,24 @@ import { installShortcuts, modKey, openCommandMenu } from './shortcuts.js';
 import { applyTheme, cycleTheme } from './theme.js';
 import { renderSalary } from './views/salary.js';
 import { renderSettings } from './views/settings.js';
+import { renderUsers } from './views/users.js';
+import { renderActivity } from './views/activity.js';
 
-const ROUTES = { overview: renderOverview, day: renderDay, month: renderMonth, inventory: renderInventory, salary: renderSalary, settings: renderSettings };
+const ROUTES = {
+  overview: renderOverview, day: renderDay, month: renderMonth, inventory: renderInventory, salary: renderSalary,
+  settings: renderSettings, users: renderUsers, activity: renderActivity,
+};
+// Who may open each page. The server enforces the same rules on every request; this only hides what you can't use.
+const ACCESS = {
+  overview: () => true,
+  day: () => can('cash'),
+  month: () => can('report'),
+  inventory: () => can('inventory'),
+  salary: () => can(['attendance', 'salary', 'employees']),
+  settings: () => true,
+  users: isAdmin,
+  activity: isAdmin,
+};
 
 const view = document.getElementById('view');
 const topbar = document.getElementById('topbar');
@@ -44,6 +60,8 @@ async function route() {
   if (!hasSession()) {
     topbar.hidden = true;
     document.body.classList.remove('demo');
+    state.meta = null;
+    state.user = null;
     return renderLogin(view, () => { state.meta = null; route(); });
   }
   topbar.hidden = false;
@@ -61,6 +79,8 @@ async function route() {
       await loadMeta();
     }
     if (id !== renderId) return;
+    drawNav();
+    if (!ACCESS[page]()) return noAccess();
     await ROUTES[page](view, ...args);
   } catch (err) {
     if (id !== renderId) return;
@@ -68,6 +88,11 @@ async function route() {
       clearSession();
       state.meta = null;
       return route();
+    }
+    if (err.code === 'FORBIDDEN') {
+      // Permissions changed while signed in: reload them and redraw.
+      state.meta = null;
+      return noAccess(err.message);
     }
     view.innerHTML = `
       <section class="page">
@@ -80,6 +105,38 @@ async function route() {
     view.querySelector('#retry').onclick = () => { state.meta = null; route(); };
   }
 }
+
+function noAccess(message = 'You don’t have access to this page. Ask the admin if you need it.') {
+  view.innerHTML = `
+    <section class="page">
+      <div class="panel">
+        <p class="eyebrow">No access</p>
+        <p>${esc(message)}</p>
+        <a class="btn" href="#/overview">Go to Overview</a>
+      </div>
+    </section>`;
+}
+
+/** Shows only the pages this user can open, plus who is signed in. */
+function drawNav() {
+  topbar.querySelectorAll('[data-route]').forEach(a => { a.hidden = !ACCESS[a.dataset.route](); });
+  const u = state.user;
+  const who = document.getElementById('whoami');
+  who.hidden = !u;
+  if (u) {
+    who.querySelector('.who-name').textContent = u.name || u.username;
+    who.querySelector('.who-role').textContent = isDemo() ? 'Demo' : u.isAdmin ? 'Admin' : `@${u.username}`;
+    who.querySelector('.avatar').textContent = (u.name || u.username || '?').trim().charAt(0).toUpperCase();
+  }
+}
+
+document.getElementById('signout').onclick = async () => {
+  if (guard.message && !window.confirm(guard.message)) return;
+  guard.message = null;
+  await signOut();
+  location.hash = '#/overview';
+  route();
+};
 
 window.addEventListener('hashchange', route);
 // Re-draw the current screen after a save made from a shortcut or the command menu.

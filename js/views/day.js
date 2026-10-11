@@ -1,5 +1,5 @@
 import { call } from '../api.js';
-import { methodLabel, methods, settings } from '../state.js';
+import { can, methodLabel, methods, settings } from '../state.js';
 import { addDays, applyTxn, esc, fmt, isISO, loading, prettyDate, sum, taka, todayISO } from '../util.js';
 import { openTxnForm } from './txnForm.js';
 
@@ -40,9 +40,10 @@ export async function renderDay(view, arg) {
           ${date !== todayISO() ? `<a class="btn ghost" href="#/day/${todayISO()}">Today</a>` : ''}
         </div>
         <div class="toolbar-actions">
-          <button class="btn in" data-add="IN">+ Cash in</button>
-          <button class="btn out" data-add="OUT">− Cash out</button>
-          <button class="btn" data-add="TRANSFER">⇄ Transfer</button>
+          ${can('cash', 'edit') ? `
+          <button class="btn in" data-add="IN">Cash in</button>
+          <button class="btn out" data-add="OUT">Cash out</button>
+          <button class="btn" data-add="TRANSFER">⇄ Transfer</button>` : '<span class="chip">View only</span>'}
           <button class="btn ghost" id="print">Print</button>
         </div>
       </div>
@@ -134,6 +135,13 @@ function card(label, value, kind = '', sub = '') {
   return `<div class="card ${kind}"><span>${label}</span><strong>${taka(value)}</strong>${sub ? `<small>${esc(sub)}</small>` : ''}</div>`;
 }
 
+/** "by Juwel" (or "by Juwel · edited by Rony") under an entry; hidden when printing. */
+function byLine(t) {
+  if (!t.createdBy && !t.updatedBy) return '';
+  const who = [t.createdBy && `by ${esc(t.createdBy)}`, t.updatedBy && `edited by ${esc(t.updatedBy)}`].filter(Boolean).join(' · ');
+  return `<small class="by no-print">${who}</small>`;
+}
+
 function ledgerTable(title, rows, total, kind) {
   return `
     <div class="panel ${kind}">
@@ -148,6 +156,7 @@ function ledgerTable(title, rows, total, kind) {
               <td>${esc(t.description)}
                 <span class="chip${t.category === 'Uncategorized' ? ' warn' : ''}">${esc(t.category)}</span>
                 ${t.note ? `<small class="note">${esc(t.note)}</small>` : ''}
+                ${byLine(t)}
               </td>
               <td class="nowrap">${esc(t.method === 'Bkash' ? 'bKash' : t.method)}</td>
               <td class="num">${fmt(t.amount)}</td>

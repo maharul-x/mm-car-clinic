@@ -1,7 +1,7 @@
 // In-browser stand-in for the Apps Script server, used by "Try the demo".
 // Data lives in this browser only. The sample data is made up.
 
-const KEY = 'mm.demo.v6';
+const KEY = 'mm.demo.v7';
 let db = null;
 
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
@@ -110,6 +110,7 @@ function persist() {
 
 export function resetDemo() {
   db = seed();
+  ensureAuth();
   persist();
 }
 
@@ -332,11 +333,249 @@ Object.assign(handlers, {
   },
 });
 
+// ───────────── Demo users, permissions and change log (mirrors Code.gs) ─────────────
+
+const SECTIONS = ['cash', 'report', 'inventory', 'attendance', 'salary', 'employees', 'settings'];
+const RANK = { none: 0, view: 1, edit: 2 };
+const RULES = {
+  me: 'any', logout: 'any', changePassword: 'any', meta: 'any', history: 'any', ping: 'any',
+  users: 'admin', updateUser: 'admin', resetPassword: 'admin', changeLog: 'admin',
+  range: [['cash', 'report'], 'view'],
+  addTxn: [['cash'], 'edit'], updateTxn: [['cash'], 'edit'], deleteTxn: [['cash'], 'edit'],
+  saveSettings: [['settings'], 'edit'], saveCategories: [['settings'], 'edit'],
+  inventory: [['inventory'], 'view'], moves: [['inventory'], 'view'],
+  saveItem: [['inventory'], 'edit'], deleteItem: [['inventory'], 'edit'], addMove: [['inventory'], 'edit'], deleteMove: [['inventory'], 'edit'],
+  employees: [['employees', 'attendance', 'salary'], 'view'],
+  saveEmployee: [['employees'], 'edit'], deleteEmployee: [['employees'], 'edit'],
+  salaryMonth: [['attendance', 'salary'], 'view'],
+  saveAttendance: [['attendance'], 'edit'],
+  addSalaryPayment: [['salary'], 'edit'], deleteSalaryPayment: [['salary'], 'edit'],
+};
+const ENTITY_SECTION = {
+  Transactions: 'cash', Inventory: 'inventory', StockMoves: 'inventory', Employees: 'employees',
+  Attendance: 'attendance', SalaryPayments: 'salary', Settings: 'settings', Categories: 'settings', Users: 'admin',
+};
+
+const pad2 = n => String(n).padStart(2, '0');
+const localStamp = (d = new Date()) =>
+  `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+const clone = o => (o ? JSON.parse(JSON.stringify(o)) : null);
+const strip = o => {
+  if (!o || Array.isArray(o)) return o;
+  const c = clone(o);
+  ['createdAt', 'updatedAt', 'createdBy', 'updatedBy', 'source', 'password', 'lastLogin'].forEach(k => delete c[k]);
+  return c;
+};
+
+function seedUsers() {
+  const full = Object.fromEntries(SECTIONS.map(s => [s, 'edit']));
+  return [
+    { id: 'u-admin', username: 'maharul', name: 'Maharul', password: 'demo1234', status: 'active', isAdmin: true, perms: full, createdAt: '2026-10-01T09:00:00', approvedBy: 'Sheet owner', lastLogin: localStamp() },
+    { id: 'u-juwel', username: 'juwel', name: 'Juwel', password: 'demo1234', status: 'active', isAdmin: false, perms: { cash: 'view', attendance: 'edit' }, createdAt: '2026-10-02T10:00:00', approvedBy: 'Maharul', lastLogin: '2026-10-11T18:20:00' },
+    { id: 'u-rony', username: 'rony', name: 'Rony', password: 'demo1234', status: 'pending', isAdmin: false, perms: {}, createdAt: '2026-10-12T08:45:00', approvedBy: '', lastLogin: '' },
+  ];
+}
+
+function ensureAuth() {
+  if (db.users) return;
+  db.users = seedUsers();
+  db.currentUserId = 'u-admin';
+  db.audit = [];
+  // Give the sample data an author, and one example edit so the history view has something to show.
+  db.txns.forEach((t, i) => { t.createdBy = i % 4 === 3 ? 'Juwel' : 'Maharul'; t.createdAt ||= `${t.date}T10:00:00`; });
+  const lunch = db.txns.find(t => t.description === 'LUNCH (FOOD)');
+  if (lunch) {
+    const before = { ...strip(lunch), amount: 560 };
+    lunch.updatedBy = 'Juwel';
+    lunch.updatedAt = `${lunch.date}T14:05:00`;
+    db.audit.push({ id: uid(), at: lunch.createdAt, user: lunch.createdBy, action: 'add', entity: 'Transactions', recordId: lunch.id, summary: `Cash out: ${lunch.description} ৳560`, before: null, after: before });
+    db.audit.push({ id: uid(), at: lunch.updatedAt, user: 'Juwel', action: 'edit', entity: 'Transactions', recordId: lunch.id, summary: `Cash out: ${lunch.description} ৳${lunch.amount}`, before, after: strip(lunch) });
+  }
+  db.attendance.forEach(a => { a.updatedBy ||= 'Juwel'; });
+  db.audit.push({ id: uid(), at: '2026-10-12T08:45:00', user: 'Rony', action: 'add', entity: 'Users', recordId: 'u-rony', summary: 'New user rony (waiting for approval)', before: null, after: { username: 'rony', name: 'Rony', status: 'pending' } });
+}
+
+const me = () => db.users.find(u => u.id === db.currentUserId) || db.users[0];
+const permsFor = u => Object.fromEntries(SECTIONS.map(s => [s, u.isAdmin ? 'edit' : (u.perms[s] || 'none')]));
+const canDo = (u, secs, lvl) => secs.some(s => RANK[permsFor(u)[s]] >= RANK[lvl]);
+const publicUser = u => ({ id: u.id, username: u.username, name: u.name, status: u.status, isAdmin: u.isAdmin, perms: permsFor(u), createdAt: u.createdAt, approvedBy: u.approvedBy, lastLogin: u.lastLogin });
+const forbidden = () => Object.assign(new Error('You don’t have access to do that. Ask the admin.'), { code: 'FORBIDDEN' });
+
+function audit(action, entity, recordId, summary, before, after) {
+  db.audit.push({ id: uid(), at: localStamp(), user: me().name, action, entity, recordId: String(recordId), summary, before: strip(before), after: strip(after) });
+}
+
+function authorize(action, p) {
+  const rule = RULES[action];
+  const u = me();
+  if (!rule) throw forbidden();
+  if (rule === 'any') return;
+  if (rule === 'admin') { if (!u.isAdmin) throw forbidden(); return; }
+  if (!canDo(u, rule[0], rule[1])) throw forbidden();
+  if ((action === 'addMove' || action === 'addSalaryPayment') && p.cash && !canDo(u, ['cash'], 'edit')) throw forbidden();
+}
+
+const txnLabel = t => `${{ IN: 'Cash in', OUT: 'Cash out', TRANSFER: 'Transfer' }[t.type]}: ${t.description} ৳${t.amount} (${t.date})`;
+
+/** Wraps a handler so that writes record who did them and what changed. */
+const base = { ...handlers };
+Object.assign(handlers, {
+  me: () => ({ user: { ...publicUser(me()), perms: permsFor(me()) } }),
+  logout: () => ({ ok: true }),
+  changePassword: ({ oldPassword, newPassword }) => {
+    const u = me();
+    if (oldPassword !== u.password) throw new Error('Your current password is wrong.');
+    if (String(newPassword).length < 8) throw new Error('The password must be at least 8 characters.');
+    u.password = newPassword;
+    audit('edit', 'Users', u.id, `Password changed for ${u.username}`, null, null);
+    return { ok: true };
+  },
+  users: () => db.users.map(publicUser),
+  updateUser: ({ user: x }) => {
+    const u = db.users.find(r => r.id === x.id);
+    if (!u) throw new Error('User not found.');
+    if (u.id === me().id && (x.status && x.status !== 'active' || x.isAdmin === false)) throw new Error('You can’t disable yourself or remove your own admin rights.');
+    const before = publicUser(u);
+    if (x.name) u.name = x.name;
+    if (x.status) u.status = x.status;
+    if (x.isAdmin !== undefined) u.isAdmin = !!x.isAdmin;
+    if (x.perms) u.perms = Object.fromEntries(SECTIONS.map(s => [s, x.perms[s] || 'none']));
+    if (before.status !== 'active' && u.status === 'active' && !u.approvedBy) u.approvedBy = me().name;
+    const after = publicUser(u);
+    const summary = before.status !== after.status ? `${{ active: 'Approved', disabled: 'Disabled', pending: 'Set to pending:' }[after.status]} ${u.username}` : `Changed access for ${u.username}`;
+    audit('edit', 'Users', u.id, summary, before, after);
+    return after;
+  },
+  resetPassword: ({ id, password }) => {
+    const u = db.users.find(r => r.id === id);
+    if (String(password).length < 8) throw new Error('The password must be at least 8 characters.');
+    u.password = password;
+    audit('edit', 'Users', u.id, `Password changed for ${u.username}`, null, null);
+    return { ok: true };
+  },
+  history: ({ entity, id }) => {
+    const sec = ENTITY_SECTION[entity];
+    if (!sec || (sec === 'admin' ? !me().isAdmin : !canDo(me(), [sec], 'view'))) throw forbidden();
+    return db.audit.filter(a => a.entity === entity && a.recordId === String(id)).reverse();
+  },
+  changeLog: ({ user, entity }) => ({
+    rows: db.audit.filter(a => (!user || a.user.toLowerCase() === user.toLowerCase()) && (!entity || a.entity === entity)).slice().reverse().slice(0, 100),
+    before: 0,
+  }),
+  addTxn: p => {
+    const res = base.addTxn(p);
+    const t = db.txns.find(x => x.id === res.id);
+    Object.assign(t, { createdBy: me().name, createdAt: localStamp(), updatedBy: '' });
+    audit('add', 'Transactions', t.id, txnLabel(t), null, t);
+    return res;
+  },
+  updateTxn: p => {
+    const before = clone(db.txns.find(x => x.id === p.txn.id));
+    const res = base.updateTxn(p);
+    const t = db.txns.find(x => x.id === p.txn.id);
+    Object.assign(t, { updatedBy: me().name, updatedAt: localStamp(), createdBy: before.createdBy, createdAt: before.createdAt });
+    audit('edit', 'Transactions', t.id, txnLabel(t), before, t);
+    return res;
+  },
+  deleteTxn: p => {
+    const before = clone(db.txns.find(x => x.id === p.id));
+    const res = base.deleteTxn(p);
+    audit('delete', 'Transactions', p.id, txnLabel(before), before, null);
+    return res;
+  },
+  saveItem: p => {
+    const before = p.item.id ? clone(db.items.find(i => i.id === p.item.id)) : null;
+    const it = base.saveItem(p);
+    const stored = db.items.find(i => i.id === it.id);
+    if (before) Object.assign(stored, { updatedBy: me().name, updatedAt: localStamp(), createdBy: before.createdBy });
+    else stored.createdBy = me().name;
+    audit(before ? 'edit' : 'add', 'Inventory', it.id, `Item: ${it.name}`, before, stored);
+    return it;
+  },
+  addMove: p => {
+    const res = base.addMove(p);
+    const m = db.moves.find(x => x.id === res.id);
+    m.createdBy = me().name;
+    const item = db.items.find(i => i.id === m.itemId);
+    const label = `${{ IN: 'Stock in', OUT: 'Stock out', ADJUST: 'Adjustment' }[m.type]}: ${item.name} ${m.qty} ${item.unit}`;
+    audit('add', 'StockMoves', m.id, label, null, m);
+    audit('add', 'Inventory', item.id, label, null, m);
+    if (res.txnId) {
+      const t = db.txns.find(x => x.id === res.txnId);
+      t.createdBy = me().name;
+      audit('add', 'Transactions', t.id, txnLabel(t), null, t);
+    }
+    return res;
+  },
+  saveEmployee: p => {
+    const before = p.employee.id ? clone(db.employees.find(e => e.id === p.employee.id)) : null;
+    const e = base.saveEmployee(p);
+    db.employees.find(x => x.id === e.id).updatedBy = me().name;
+    audit(before ? 'edit' : 'add', 'Employees', e.id, `${before ? 'Employee' : 'New employee'}: ${e.name}`, before, e);
+    return e;
+  },
+  saveAttendance: p => {
+    const names = Object.fromEntries(db.employees.map(e => [e.id, e.name]));
+    const changes = p.records.map(r => ({
+      date: r.date, employee: names[r.employeeId], to: r.status,
+      from: (db.attendance.find(a => a.date === r.date && a.employeeId === r.employeeId) || {}).status || '',
+    })).filter(c => c.from !== c.to);
+    const res = base.saveAttendance(p);
+    p.records.forEach(r => {
+      const a = db.attendance.find(x => x.date === r.date && x.employeeId === r.employeeId);
+      if (a) a.updatedBy = me().name;
+    });
+    const months = [...new Set(changes.map(c => c.date.slice(0, 7)))];
+    months.forEach(mo => {
+      const list = changes.filter(c => c.date.startsWith(mo));
+      audit('edit', 'Attendance', mo, `${list.length} attendance change${list.length === 1 ? '' : 's'} for ${mo}`, null, list);
+    });
+    return res;
+  },
+  addSalaryPayment: p => {
+    const res = base.addSalaryPayment(p);
+    const pay = db.payments.find(x => x.id === res.id);
+    pay.createdBy = me().name;
+    const emp = db.employees.find(e => e.id === pay.employeeId);
+    audit('add', 'SalaryPayments', pay.id, `${pay.type === 'ADVANCE' ? 'Advance' : 'Salary'} to ${emp.name} ৳${pay.amount} for ${pay.month}`, null, { employee: emp.name, ...pay });
+    if (res.txnId) {
+      const t = db.txns.find(x => x.id === res.txnId);
+      t.createdBy = me().name;
+      audit('add', 'Transactions', t.id, txnLabel(t), null, t);
+    }
+    return res;
+  },
+  salaryMonth: p => {
+    const out = base.salaryMonth(p);
+    const u = me();
+    if (!canDo(u, ['salary'], 'view')) out.payments = [];
+    if (!canDo(u, ['salary', 'employees'], 'view')) out.employees = out.employees.map(({ basicSalary, ...e }) => e);
+    return out;
+  },
+  employees: p => {
+    const list = base.employees(p);
+    return canDo(me(), ['salary', 'employees'], 'view') ? list : list.map(({ basicSalary, ...e }) => e);
+  },
+});
+
+/** Demo only: switch which sample user you are, to preview their access. */
+export function demoSwitchUser(username) {
+  load();
+  ensureAuth();
+  const u = db.users.find(x => x.username === username && x.status === 'active');
+  if (!u) return false;
+  db.currentUserId = u.id;
+  persist();
+  return true;
+}
+
 export async function mockCall(action, params) {
   await new Promise(r => setTimeout(r, 120));
   load();
+  ensureAuth();
   const fn = handlers[action];
   if (!fn) throw new Error(`Unknown action: ${action}`);
+  authorize(action, params || {});
   const out = fn(params || {});
   persist();
   return JSON.parse(JSON.stringify(out ?? null));

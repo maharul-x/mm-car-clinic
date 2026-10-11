@@ -49,11 +49,11 @@ Please don't rename these tabs or their header row. You can read them and filter
 
 ### 2. Prepare the sheet
 1. **M&M App → 1. Set up / repair tabs** (Google will ask you to allow the script the first time).
-2. **M&M App → 2. Set app password**: choose a password of at least 8 characters. Everyone using the app signs in with it.
-3. *(Optional)* **M&M App → 3. Import old daily sheets**: copies every old "DAILY CASH FLOW LEDGER" tab into
+2. **M&M App → 2. Create an admin account**: your own username, name and password. You use this to sign in and approve everyone else.
+3. *(Optional)* **M&M App → 4. Import old daily sheets**: copies every old "DAILY CASH FLOW LEDGER" tab into
    `Transactions`, sets the opening balances from the first day, and reads the category from the brackets
    in the description, e.g. `LUNCH (FOOD)` → Food. Your old tabs are not changed, and running it again replaces the earlier import.
-4. *(Optional)* **M&M App → 4. Import employees from a salary sheet**: paste the salary sheet's link and the month.
+4. *(Optional)* **M&M App → 5. Import employees from a salary sheet**: paste the salary sheet's link and the month.
    Employees (name, designation, basic salary) are added or updated, and the "Advance Salary Taken" amounts are
    recorded as advances for that month. Designations containing "Invest" or "Head of" are set to no absence deduction.
 
@@ -67,14 +67,14 @@ Days before an employee's joining date are deducted. Days after today aren't cou
 2. *Execute as:* **Me**. *Who has access:* **Anyone**.
 3. **Deploy** and copy the **Web app URL** (ends in `/exec`).
 
-"Anyone" means anyone with the URL can reach the script, but every request is checked against the app
-password before any data is read or changed. After 10 wrong passwords it locks for 15 minutes.
-The password lives only in the script's properties, never in this repo, so the public code doesn't expose it.
+"Anyone" means anyone with the URL can reach the script, but every request (except sign-in and sign-up)
+must carry a valid session, and the script checks that user's access before reading or changing anything.
+Passwords are stored only as salted hashes in the `Users` tab; nothing secret is in this repo.
 
 After changing `Code.gs` later: **Deploy → Manage deployments → ✏️ → Version: New version → Deploy** (the URL stays the same).
 
 ### 4. Open the app
-Open the GitHub Pages site, paste the Web app URL, enter the password.
+Open the GitHub Pages site, paste the Web app URL, and sign in with the admin account.
 To skip pasting the URL on every new device, put it in [`js/config.js`](js/config.js) and push.
 
 ## Run locally
@@ -84,3 +84,22 @@ python -m http.server 5500
 ```
 
 Then open http://localhost:5500. **Try the demo** (shown only on localhost) works without a server, using made-up sample data that stays in that browser.
+
+## Users & access
+
+- **Sign-up and approval.** Staff choose a username and password under **Request access** on the sign-in
+  screen. Their account stays *waiting for approval* until an admin approves it under **Users**.
+- **Access per section.** For each person the admin sets Cash book, Monthly report, Inventory, Attendance,
+  Salary sheet, Employees and Settings to **Hidden**, **View** or **View & edit**. Admins can do everything.
+  The script checks this on every request, so editing the public website code doesn't get around it.
+- **Salary privacy.** Basic salary and payments are only sent to people with Salary sheet or Employees access.
+  Attendance-only users see days, not money.
+- **Added by / edited by.** Every cash entry, stock movement, attendance mark, salary payment, item and employee
+  records who added it and who last changed it.
+- **Full change history.** The `ChangeLog` tab keeps every add, edit and delete with the old and new values.
+  Open any entry → *History*, or see everything under **Activity** (admins).
+- **Passwords.** Stored as salted HMAC-SHA256 hashes (1,000 rounds). Five wrong tries lock that username for
+  15 minutes. People are signed out after 6 hours without using the app. An admin can reset a password
+  (which signs that person out everywhere), or use **M&M App → 3. Reset a user's password** in the sheet.
+- **Keep the Google Sheet private.** Anyone with edit access to the Sheet itself can change anything, including
+  the `Users` and `ChangeLog` tabs. Give staff the app, not the Sheet.

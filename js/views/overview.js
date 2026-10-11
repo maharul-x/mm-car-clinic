@@ -1,7 +1,7 @@
 import { call } from '../api.js';
-import { methodLabel, methods } from '../state.js';
+import { can, methodLabel, methods, state } from '../state.js';
 import { addDays, applyTxn, esc, fmt, loading, prettyDate, sum, taka, todayISO } from '../util.js';
-import { SHORTCUTS, runShortcut, modKey } from '../shortcuts.js';
+import { available, runShortcut, modKey } from '../shortcuts.js';
 
 const DAYS = 14;
 
@@ -12,13 +12,16 @@ export async function renderOverview(view) {
   const month = today.slice(0, 7);
   const from = [addDays(today, -(DAYS - 1)), `${month}-01`].sort()[0];
 
+  // Only ask for what this user is allowed to see.
+  const seeCash = can(['cash', 'report']);
+  const skip = Promise.resolve(null);
   const [cash, stock, salary] = await Promise.allSettled([
-    call('range', { from, to: today }),
-    call('inventory'),
-    call('salaryMonth', { month }),
+    seeCash ? call('range', { from, to: today }) : skip,
+    can('inventory') ? call('inventory') : skip,
+    can('attendance') ? call('salaryMonth', { month }) : skip,
   ]);
   if (cash.status === 'rejected') throw cash.reason;
-  const { opening, txns } = cash.value;
+  const { opening, txns } = cash.value || { opening: {}, txns: [] };
   const syncedAt = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 
   // Balance at the start of the 14-day window, then walk forward one day at a time.
@@ -45,19 +48,19 @@ export async function renderOverview(view) {
   // Checklist inputs
   const todaysEntries = txns.filter(t => t.date === today);
   const uncategorized = txns.filter(t => t.date >= `${month}-01` && t.type !== 'TRANSFER' && (!t.category || t.category === 'Uncategorized'));
-  const items = stock.status === 'fulfilled' ? stock.value.filter(i => i.active) : null;
+  const items = stock.status === 'fulfilled' && stock.value ? stock.value.filter(i => i.active) : null;
   const low = items ? items.filter(i => i.qty <= i.reorderLevel) : [];
   let staff = null;
   let marked = 0;
-  if (salary.status === 'fulfilled') {
+  if (salary.status === 'fulfilled' && salary.value) {
     staff = salary.value.employees.filter(e => e.active && e.trackAttendance);
     marked = staff.filter(e => salary.value.attendance.some(a => a.employeeId === e.id && a.date === today)).length;
   }
   const isFriday = new Date().getDay() === 5;
   const checks = [
-    { done: todaysEntries.length > 0, label: 'Cash book updated today', meta: `${todaysEntries.length} entr${todaysEntries.length === 1 ? 'y' : 'ies'}`, href: `#/day/${today}` },
+    can('cash') && { done: todaysEntries.length > 0, label: 'Cash book updated today', meta: `${todaysEntries.length} entr${todaysEntries.length === 1 ? 'y' : 'ies'}`, href: `#/day/${today}` },
     staff && { done: isFriday || (staff.length > 0 && marked === staff.length), label: 'Attendance marked', meta: isFriday ? 'Friday · off' : `${marked} of ${staff.length} staff`, href: '#/salary/attendance' },
-    { done: uncategorized.length === 0, label: 'Every entry has a category', meta: uncategorized.length ? `${uncategorized.length} uncategorized` : 'This month', href: `#/month/${month}` },
+    can('report') && { done: uncategorized.length === 0, label: 'Every entry has a category', meta: uncategorized.length ? `${uncategorized.length} uncategorized` : 'This month', href: `#/month/${month}` },
     items && { done: low.length === 0, label: 'Stock above reorder level', meta: low.length ? `${low.length} item${low.length === 1 ? '' : 's'} low` : `${items.length} items`, href: '#/inventory' },
   ].filter(Boolean);
   const doneCount = checks.filter(c => c.done).length;
@@ -68,11 +71,12 @@ export async function renderOverview(view) {
   view.innerHTML = `
     <section class="page overview">
       <header class="page-head">
-        <p class="eyebrow">Overview</p>
+        <p class="eyebrow">Overview · ${esc(state.user?.name || '')}</p>
         <h1 class="page-title">${esc(prettyDate(today, { weekday: 'long', day: 'numeric', month: 'long' }))}</h1>
       </header>
 
       <div class="bento">
+        ${seeCash ? `
         <article class="tile wide">
           <div class="term-bar">
             <span class="dot-live" aria-hidden="true"></span>
@@ -115,7 +119,7 @@ export async function renderOverview(view) {
                 </li>`;
             }).join('')}
           </ul>
-        </article>
+        </article>` : ''}
 
         <article class="tile">
           <div class="tile-head">
@@ -124,7 +128,7 @@ export async function renderOverview(view) {
             <p class="tile-desc">Press a key anywhere in the app. Not while typing in a field.</p>
           </div>
           <ul class="kbd-list">
-            ${SHORTCUTS.filter(s => s.showOnOverview).map(s => `
+            ${available().filter(s => s.showOnOverview).map(s => `
               <li><button type="button" data-shortcut="${esc(s.id)}">
                 <span>${esc(s.label)}</span>
                 <span class="keys">${s.keys.map(k => `<kbd>${esc(k === 'Mod' ? modKey() : k)}</kbd>`).join('')}</span>
@@ -132,6 +136,7 @@ export async function renderOverview(view) {
           </ul>
         </article>
 
+        ${checks.length ? `
         <article class="tile">
           <div class="tile-head">
             <p class="eyebrow">Today · ${doneCount}/${checks.length} done</p>
@@ -147,8 +152,9 @@ export async function renderOverview(view) {
                 </a>
               </li>`).join('')}
           </ul>
-        </article>
+        </article>` : ''}
 
+        ${seeCash ? `
         <article class="tile">
           <div class="tile-head">
             <p class="eyebrow">Activity</p>
@@ -159,15 +165,15 @@ export async function renderOverview(view) {
               <a href="#/day/${t.date}">
                 <span class="feed-dot ${t.type === 'IN' ? 'in' : 'out'}" aria-hidden="true"></span>
                 <span class="feed-main"><span class="feed-title">${esc(t.description)}</span>
-                  <span class="feed-meta">${esc(t.category)} · ${esc(prettyDate(t.date, { day: 'numeric', month: 'short' }))}</span></span>
+                  <span class="feed-meta">${esc(t.category)} · ${esc(prettyDate(t.date, { day: 'numeric', month: 'short' }))}${t.createdBy ? ` · ${esc(t.createdBy)}` : ''}</span></span>
                 <span class="feed-amt ${t.type === 'IN' ? 'pos' : ''}">${t.type === 'IN' ? '+' : '−'}${fmt(t.amount)}</span>
               </a>
             </li>`).join('')}</ul>` : '<p class="empty">No entries yet.</p>'}
-        </article>
+        </article>` : ''}
       </div>
     </section>`;
 
-  wireChart(view, series);
+  if (seeCash) wireChart(view, series);
   view.onclick = e => {
     const b = e.target.closest('[data-shortcut]');
     if (b) runShortcut(b.dataset.shortcut);

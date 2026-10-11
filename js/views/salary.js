@@ -1,9 +1,10 @@
 import { call } from '../api.js';
-import { methodLabel, methods, settings } from '../state.js';
+import { can, methodLabel, methods, settings } from '../state.js';
 import {
   addMonths, confirmDialog, esc, fmt, formError, guard, isMonth, lastDayOfMonth, loading,
   openModal, options, parseISO, prettyDate, prettyMonth, submitting, sum, taka, toast, todayISO,
 } from '../util.js';
+import { openHistory } from './history.js';
 
 const STATUS = {
   P: { label: 'Present', short: 'P' },
@@ -15,10 +16,14 @@ const CYCLE = ['', 'P', 'A', 'L', 'O'];
 // One day's pay = basic ÷ 26 (a month has about 26 working days; Friday is the weekly off).
 const WORKING_DAYS = 26;
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const TABS = [['attendance', 'Attendance'], ['sheet', 'Salary sheet'], ['employees', 'Employees']];
+const ALL_TABS = [['attendance', 'Attendance'], ['sheet', 'Salary sheet'], ['employees', 'Employees']];
+const TAB_SECTION = { attendance: 'attendance', sheet: 'salary', employees: 'employees' };
+let TABS = ALL_TABS;
 
 export async function renderSalary(view, sub, arg) {
-  const tab = TABS.some(t => t[0] === sub) ? sub : 'attendance';
+  TABS = ALL_TABS.filter(([k]) => can(TAB_SECTION[k]));
+  if (!TABS.length) throw Object.assign(new Error('You don’t have access to this page.'), { code: 'FORBIDDEN' });
+  const tab = TABS.some(t => t[0] === sub) ? sub : TABS[0][0];
   const month = isMonth(arg) ? arg : todayISO().slice(0, 7);
   view.innerHTML = loading();
   if (tab === 'employees') return renderEmployees(view, await call('employees'));
@@ -98,6 +103,9 @@ function renderAttendance(view, month, data) {
   const off = offDays();
   const today = todayISO();
   const saved = new Map(data.attendance.map(a => [`${a.date}|${a.employeeId}`, a.status]));
+  const markedBy = new Map(data.attendance.map(a => [`${a.date}|${a.employeeId}`, a.updatedBy]));
+  const edit = can('attendance', 'edit');
+  const seesMoney = can(['salary', 'employees']);
   const pending = new Map();
   const statusOf = (id, d) => {
     const k = `${d}|${id}`;
@@ -112,14 +120,16 @@ function renderAttendance(view, month, data) {
       <div class="toolbar">
         ${monthNav('attendance', month)}
         <div class="toolbar-actions">
+          <button class="btn ghost" id="att-history">Change history</button>
+          ${edit ? `
           ${month === today.slice(0, 7) ? '<button class="btn" id="all-present">Mark today: all present</button>' : ''}
-          <button class="btn primary" id="save" disabled>Save changes</button>
+          <button class="btn primary" id="save" disabled>Save changes</button>` : '<span class="chip">View only</span>'}
         </div>
       </div>
       <h1 class="page-title">Attendance · ${esc(prettyMonth(month))}</h1>
       <p class="legend">
         ${Object.entries(STATUS).map(([k, s]) => `<span><b class="att s-${k}">${k}</b>${s.label}</span>`).join('')}
-        <span class="muted">Tap a day to change it. Blank working days count as present.</span>
+        <span class="muted">${edit ? 'Tap a day to change it. ' : ''}Blank working days count as present. Hover a day to see who marked it.</span>
       </p>
       ${staff.length ? `
         <div class="panel grid-panel">
@@ -131,13 +141,13 @@ function renderAttendance(view, month, data) {
                   const wd = parseISO(d).getDay();
                   return `<th class="${off.has(wd) ? 'off' : ''} ${d === today ? 'today' : ''}">${Number(d.slice(8))}<small>${WEEKDAYS[wd].slice(0, 2)}</small></th>`;
                 }).join('')}
-                <th class="sum">Present</th><th class="sum">Absent</th><th class="sum">Leave</th><th class="sum">Deduction</th>
+                <th class="sum">Present</th><th class="sum">Absent</th><th class="sum">Leave</th>${seesMoney ? '<th class="sum">Deduction</th>' : ''}
               </tr></thead>
               <tbody>${staff.map(e => `
                 <tr data-emp="${esc(e.id)}">
                   <th class="sticky" scope="row">${esc(e.name)}<small>${esc(e.designation)}</small></th>
-                  ${days.map(d => `<td><button class="att" data-day="${d}" aria-label="${esc(e.name)}, ${esc(prettyDate(d, { day: 'numeric', month: 'short' }))}"></button></td>`).join('')}
-                  <td class="sum" data-k="present"></td><td class="sum" data-k="A"></td><td class="sum" data-k="L"></td><td class="sum" data-k="ded"></td>
+                  ${days.map(d => `<td><button class="att" data-day="${d}" ${edit ? '' : 'aria-disabled="true"'} aria-label="${esc(e.name)}, ${esc(prettyDate(d, { day: 'numeric', month: 'short' }))}"></button></td>`).join('')}
+                  <td class="sum" data-k="present"></td><td class="sum" data-k="A"></td><td class="sum" data-k="L"></td>${seesMoney ? '<td class="sum" data-k="ded"></td>' : ''}
                 </tr>`).join('')}
               </tbody>
             </table>
@@ -148,7 +158,8 @@ function renderAttendance(view, month, data) {
     </section>`;
   wireMonthPick(view, 'attendance');
 
-  const saveBtn = view.querySelector('#save');
+  const saveBtn = view.querySelector('#save') || { disabled: true };
+  view.querySelector('#att-history').onclick = () => openHistory({ entity: 'Attendance', id: month, title: `Attendance ${prettyMonth(month)}` });
   const draw = () => {
     const rows = payroll(month, data, statusOf);
     view.querySelectorAll('tr[data-emp]').forEach(tr => {
@@ -160,14 +171,17 @@ function renderAttendance(view, month, data) {
         const s = explicit || auto;
         b.className = `att${s ? ` s-${s}` : ''}${auto ? ' auto' : ''}${pending.has(`${d}|${id}`) ? ' changed' : ''}`;
         b.textContent = s;
-        b.title = s ? STATUS[s].label + (auto ? ' (weekly off)' : '') : 'Not marked (counts as present)';
+        const by = !pending.has(`${d}|${id}`) && explicit ? markedBy.get(`${d}|${id}`) : '';
+        b.title = (s ? STATUS[s].label + (auto ? ' (weekly off)' : '') : 'Not marked (counts as present)') + (by ? ` · marked by ${by}` : '');
       });
       const r = rows.find(x => x.e.id === id);
       tr.querySelector('[data-k="present"]').textContent = r.present;
       tr.querySelector('[data-k="A"]').textContent = r.c.A || '';
       tr.querySelector('[data-k="L"]').textContent = r.c.L || '';
-      tr.querySelector('[data-k="ded"]').textContent = r.deduction ? fmt(r.deduction) : '';
+      const ded = tr.querySelector('[data-k="ded"]');
+      if (ded) ded.textContent = r.deduction ? fmt(r.deduction) : '';
     });
+    if (!edit) return;
     saveBtn.disabled = !pending.size;
     saveBtn.textContent = pending.size ? `Save ${pending.size} change${pending.size === 1 ? '' : 's'}` : 'Saved';
     guard.message = pending.size ? 'You have unsaved attendance changes. Leave without saving?' : null;
@@ -185,7 +199,7 @@ function renderAttendance(view, month, data) {
 
   view.onclick = e => {
     const b = e.target.closest('button[data-day]');
-    if (!b) return;
+    if (!b || !edit) return;
     const id = b.closest('tr').dataset.emp;
     const d = b.dataset.day;
     set(id, d, CYCLE[(CYCLE.indexOf(statusOf(id, d)) + 1) % CYCLE.length]);
@@ -204,7 +218,10 @@ function renderAttendance(view, month, data) {
         return { date, employeeId, status };
       });
       await call('saveAttendance', { records });
-      records.forEach(r => saved.set(`${r.date}|${r.employeeId}`, r.status));
+      records.forEach(r => {
+        saved.set(`${r.date}|${r.employeeId}`, r.status);
+        markedBy.set(`${r.date}|${r.employeeId}`, 'you');
+      });
       pending.clear();
       toast('Attendance saved');
     } catch (err) {
@@ -262,8 +279,8 @@ function renderSheet(view, month, data) {
                 <td class="num">${fmt(r.paid)}</td>
                 <td class="num ${r.due < 0 ? 'neg' : ''}">${r.due === 0 && r.net > 0 ? '<span class="status ok">Paid</span>' : fmt(r.due)}</td>
                 <td class="row-actions no-print">
-                  <button class="btn small" data-pay="ADVANCE" data-id="${esc(r.e.id)}">+ Advance</button>
-                  <button class="btn small primary" data-pay="SALARY" data-id="${esc(r.e.id)}" ${r.due > 0 ? '' : 'disabled'}>Pay</button>
+                  ${can('salary', 'edit') ? `<button class="btn small" data-pay="ADVANCE" data-id="${esc(r.e.id)}">+ Advance</button>
+                  <button class="btn small primary" data-pay="SALARY" data-id="${esc(r.e.id)}" ${r.due > 0 ? '' : 'disabled'}>Pay</button>` : ''}
                   <button class="link" data-history="${esc(r.e.id)}">Payments${r.pays.length ? ` (${r.pays.length})` : ''}</button>
                 </td>
               </tr>`).join('')}</tbody>
@@ -352,9 +369,9 @@ function openPayments({ row, month, onChanged }) {
             <td class="nowrap">${esc(prettyDate(p.date, { day: 'numeric', month: 'short' }))}</td>
             <td>${p.type === 'ADVANCE' ? 'Advance' : 'Salary'}${p.txnId ? ' <span class="chip">in cash book</span>' : ''}</td>
             <td>${esc(methodLabel(p.method))}</td>
-            <td>${esc(p.note)}</td>
+            <td>${esc(p.note)}${p.createdBy ? `<small class="by">by ${esc(p.createdBy)}</small>` : ''}</td>
             <td class="num">${fmt(p.amount)}</td>
-            <td class="row-actions"><button class="link danger" data-del="${esc(p.id)}">Delete</button></td>
+            <td class="row-actions">${can('salary', 'edit') ? `<button class="link danger" data-del="${esc(p.id)}">Delete</button>` : ''}</td>
           </tr>`).join('')}</tbody>
       </table></div>` : '<p class="empty">No payments for this month yet.</p>',
   });
@@ -380,6 +397,7 @@ function renderEmployees(view, employees) {
   const archived = employees.filter(e => !e.active);
   const refresh = () => renderSalary(view, 'employees');
   const month = todayISO().slice(0, 7);
+  const edit = can('employees', 'edit');
   const table = list => `
     <div class="table-wrap"><table class="table">
       <thead><tr><th>Name</th><th>Designation</th><th class="num">Basic salary</th><th>Phone</th><th>Attendance</th><th><span class="sr">Actions</span></th></tr></thead>
@@ -390,9 +408,11 @@ function renderEmployees(view, employees) {
           <td class="num">${fmt(e.basicSalary)}</td>
           <td>${esc(e.phone)}</td>
           <td>${e.trackAttendance ? 'Tracked' : '<span class="muted">Not tracked</span>'}</td>
-          <td class="row-actions">${e.active
-            ? `<button class="link" data-edit="${esc(e.id)}">Edit</button>`
-            : `<button class="link" data-restore="${esc(e.id)}">Restore</button>`}</td>
+          <td class="row-actions">
+            <button class="link" data-emp-history="${esc(e.id)}">History</button>
+            ${!edit ? '' : e.active
+              ? `<button class="link" data-edit="${esc(e.id)}">Edit</button>`
+              : `<button class="link" data-restore="${esc(e.id)}">Restore</button>`}</td>
         </tr>`).join('')}</tbody>
     </table></div>`;
 
@@ -401,7 +421,7 @@ function renderEmployees(view, employees) {
       ${subnav('employees', month)}
       <div class="toolbar">
         <h1 class="page-title">Employees</h1>
-        <div class="toolbar-actions"><button class="btn primary" id="new">+ New employee</button></div>
+        <div class="toolbar-actions">${edit ? '<button class="btn primary" id="new">+ New employee</button>' : '<span class="chip">View only</span>'}</div>
       </div>
       <div class="cards">
         <div class="card"><span>Active employees</span><strong>${active.length}</strong></div>
@@ -414,11 +434,16 @@ function renderEmployees(view, employees) {
     </section>`;
 
   const byId = new Map(employees.map(e => [e.id, e]));
-  view.querySelector('#new').onclick = () => openEmployeeForm({ onSaved: refresh });
+  view.querySelector('#new')?.addEventListener('click', () => openEmployeeForm({ onSaved: refresh }));
   view.onclick = async e => {
-    const edit = e.target.closest('[data-edit]');
+    const editBtn = e.target.closest('[data-edit]');
     const restore = e.target.closest('[data-restore]');
-    if (edit) openEmployeeForm({ emp: byId.get(edit.dataset.edit), onSaved: refresh });
+    const hist = e.target.closest('[data-emp-history]');
+    if (hist) {
+      const emp = byId.get(hist.dataset.empHistory);
+      openHistory({ entity: 'Employees', id: emp.id, title: emp.name });
+    }
+    if (editBtn) openEmployeeForm({ emp: byId.get(editBtn.dataset.edit), onSaved: refresh });
     if (restore) {
       try {
         await call('saveEmployee', { employee: { ...byId.get(restore.dataset.restore), active: true } });

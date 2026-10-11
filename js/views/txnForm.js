@@ -1,12 +1,17 @@
 import { call } from '../api.js';
-import { categories, methodLabel, methods } from '../state.js';
+import { can, categories, methodLabel, methods } from '../state.js';
 import { confirmDialog, esc, formError, openModal, options, submitting, taka, toast } from '../util.js';
+import { loadHistory, stampLine } from './history.js';
 
 const TITLES = { IN: 'Cash in', OUT: 'Cash out', TRANSFER: 'Move money between accounts' };
 
-/** Add or edit one cash-book entry. Calls onSaved() after every successful save. */
+/**
+ * Add, edit or (for view-only users) look at one cash-book entry, with who added/edited it and its full history.
+ * Calls onSaved() after every successful save or delete.
+ */
 export function openTxnForm({ type, date, txn, onSaved }) {
   const editing = !!txn;
+  const readOnly = !can('cash', 'edit');
   type = txn?.type || type;
   const ms = methods();
   const cats = [...categories(type)];
@@ -21,9 +26,11 @@ export function openTxnForm({ type, date, txn, onSaved }) {
     : `<label>${type === 'IN' ? 'Received in' : 'Paid from'}<select name="method">${options(ms, t.method, methodLabel)}</select></label>`;
 
   const m = openModal({
-    title: `${editing ? 'Edit' : 'New'}: ${TITLES[type]}`,
+    title: `${readOnly ? '' : editing ? 'Edit: ' : 'New: '}${TITLES[type]}`,
     body: `
+      ${editing ? stampLine(t) : ''}
       <form class="form" novalidate>
+       <fieldset class="plain" ${readOnly ? 'disabled' : ''}>
         ${type === 'TRANSFER' ? '' : `
           <label>${type === 'IN' ? 'Customer / description' : 'Description'}
             <input name="description" maxlength="200" required autofocus value="${esc(t.description || '')}"
@@ -45,12 +52,26 @@ export function openTxnForm({ type, date, txn, onSaved }) {
           ${type === 'TRANSFER' ? '' : `<label>Invoice no. (optional)<input name="invoice" maxlength="40" value="${esc(t.invoice || '')}"></label>`}
         </div>
         <label>Note (optional)<textarea name="note" rows="2" maxlength="300">${esc(t.note || '')}</textarea></label>
+       </fieldset>
         <p class="form-error" hidden></p>
+        ${readOnly ? '<p class="muted small">You can view this entry but not change it.</p>' : `
         <div class="actions">
           ${editing ? '<button type="button" class="btn danger ghost" data-delete>Delete</button><span class="spacer"></span>' : '<button type="submit" class="btn" data-again>Save &amp; add another</button>'}
           <button type="submit" class="btn primary">Save</button>
-        </div>
-      </form>`,
+        </div>`}
+      </form>
+      ${editing ? `
+        <details class="history-box">
+          <summary>History</summary>
+          <div class="h-body"></div>
+        </details>` : ''}`,
+  });
+  const box = m.el.querySelector('.history-box');
+  box?.addEventListener('toggle', () => {
+    if (box.open && !box.dataset.loaded) {
+      box.dataset.loaded = '1';
+      loadHistory(box.querySelector('.h-body'), 'Transactions', t.id);
+    }
   });
 
   const form = m.el.querySelector('form');
@@ -64,6 +85,7 @@ export function openTxnForm({ type, date, txn, onSaved }) {
   });
   form.addEventListener('submit', async e => {
     e.preventDefault();
+    if (readOnly) return;
     const again = !!e.submitter?.hasAttribute('data-again');
     const v = Object.fromEntries(new FormData(form));
     const amount = Number(v.amount);

@@ -9,14 +9,16 @@
  */
 
 const TABS = {
-  TXN: { name: 'Transactions', headers: ['id', 'date', 'type', 'invoice', 'description', 'category', 'amount', 'method', 'toMethod', 'note', 'source', 'createdAt', 'updatedAt'] },
+  TXN: { name: 'Transactions', headers: ['id', 'date', 'type', 'invoice', 'description', 'category', 'amount', 'method', 'toMethod', 'note', 'source', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy'] },
   CAT: { name: 'Categories', headers: ['type', 'name'] },
   SET: { name: 'Settings', headers: ['key', 'value'] },
-  ITEM: { name: 'Inventory', headers: ['id', 'sku', 'name', 'category', 'unit', 'costPrice', 'salePrice', 'reorderLevel', 'active', 'createdAt', 'updatedAt'] },
-  MOVE: { name: 'StockMoves', headers: ['id', 'date', 'itemId', 'type', 'qty', 'unitPrice', 'reference', 'note', 'txnId', 'createdAt'] },
-  EMP: { name: 'Employees', headers: ['id', 'name', 'designation', 'basicSalary', 'phone', 'joinDate', 'trackAttendance', 'active', 'sortOrder', 'createdAt', 'updatedAt'] },
-  ATT: { name: 'Attendance', headers: ['key', 'date', 'employeeId', 'status', 'note', 'updatedAt'] },
-  PAY: { name: 'SalaryPayments', headers: ['id', 'date', 'employeeId', 'month', 'type', 'amount', 'method', 'note', 'txnId', 'source', 'createdAt'] },
+  ITEM: { name: 'Inventory', headers: ['id', 'sku', 'name', 'category', 'unit', 'costPrice', 'salePrice', 'reorderLevel', 'active', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy'] },
+  MOVE: { name: 'StockMoves', headers: ['id', 'date', 'itemId', 'type', 'qty', 'unitPrice', 'reference', 'note', 'txnId', 'createdAt', 'createdBy'] },
+  EMP: { name: 'Employees', headers: ['id', 'name', 'designation', 'basicSalary', 'phone', 'joinDate', 'trackAttendance', 'active', 'sortOrder', 'createdAt', 'updatedAt', 'updatedBy'] },
+  ATT: { name: 'Attendance', headers: ['key', 'date', 'employeeId', 'status', 'note', 'updatedAt', 'updatedBy'] },
+  PAY: { name: 'SalaryPayments', headers: ['id', 'date', 'employeeId', 'month', 'type', 'amount', 'method', 'note', 'txnId', 'source', 'createdAt', 'createdBy'] },
+  USER: { name: 'Users', headers: ['id', 'username', 'name', 'passHash', 'status', 'isAdmin', 'perms', 'createdAt', 'approvedBy', 'lastLogin', 'sessionsFrom'] },
+  AUDIT: { name: 'ChangeLog', headers: ['id', 'at', 'user', 'action', 'entity', 'recordId', 'summary', 'before', 'after'] },
 };
 
 const DEFAULT_SETTINGS = {
@@ -42,7 +44,15 @@ const PAY_TYPES = ['ADVANCE', 'SALARY'];
 const NO_DEDUCTION = /invest|head\s+of/i;
 const SETTING_KEYS = /^(businessName|address|phone|preparedBy|methods|startDate|weeklyOff|opening_[A-Za-z0-9 ]+)$/;
 // Columns written as real dates; every other string is forced to plain text.
-const DATE_FIELDS = ['date', 'joinDate', 'createdAt', 'updatedAt'];
+const DATE_FIELDS = ['date', 'joinDate', 'createdAt', 'updatedAt', 'at', 'lastLogin'];
+
+// Parts of the app a user can be given access to. Each is 'none' (hidden), 'view' or 'edit'.
+const SECTIONS = ['cash', 'report', 'inventory', 'attendance', 'salary', 'employees', 'settings'];
+const LEVELS = ['none', 'view', 'edit'];
+const SESSION_TTL = 21600; // seconds of inactivity before sign-out (the Apps Script cache maximum, 6 h)
+const HASH_ROUNDS = 1000;
+// Who is making the current request; set in doPost, used for "added by / edited by" and the change log.
+let ACTOR = null;
 
 // ───────────────────────────── Sheet menu ─────────────────────────────
 
@@ -50,9 +60,10 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('M&M App')
     .addItem('1. Set up / repair tabs', 'setup')
-    .addItem('2. Set app password', 'setPin')
-    .addItem('3. Import old daily sheets', 'importLegacySheets')
-    .addItem('4. Import employees from a salary sheet', 'importSalarySheet')
+    .addItem('2. Create an admin account', 'createAdmin')
+    .addItem('3. Reset a user\'s password', 'resetPasswordFromSheet')
+    .addItem('4. Import old daily sheets', 'importLegacySheets')
+    .addItem('5. Import employees from a salary sheet', 'importSalarySheet')
     .addToUi();
 }
 
@@ -67,7 +78,10 @@ function ensureTabs_() {
     const tab = TABS[k];
     let sh = ss.getSheetByName(tab.name);
     if (!sh) sh = ss.insertSheet(tab.name);
-    if (sh.getRange(1, 1).getValue() === '') {
+    const current = sh.getRange(1, 1, 1, tab.headers.length).getValues()[0].map(String);
+    const isPrefix = current.every((h, i) => h === '' || h === tab.headers[i]);
+    if (current[0] === '' || (isPrefix && current.join() !== tab.headers.join())) {
+      // New install, or an older version of this tab: (re)write the header row, keeping the data below.
       sh.getRange(1, 1, 1, tab.headers.length).setValues([tab.headers]).setFontWeight('bold');
       sh.setFrozenRows(1);
     }
@@ -88,29 +102,69 @@ function ensureTabs_() {
   }
 }
 
-function setPin() {
+function createAdmin() {
   const ui = SpreadsheetApp.getUi();
-  const res = ui.prompt('Set app password', 'Choose a password of at least 8 characters. Everyone who uses the app signs in with it.', ui.ButtonSet.OK_CANCEL);
-  if (res.getSelectedButton() !== ui.Button.OK) return;
-  const pin = res.getResponseText().trim();
-  if (pin.length < 8) {
-    ui.alert('The password must be at least 8 characters. Nothing was changed.');
-    return;
+  ensureTabs_();
+  const ask = (title, text) => {
+    const r = ui.prompt(title, text, ui.ButtonSet.OK_CANCEL);
+    return r.getSelectedButton() === ui.Button.OK ? r.getResponseText().trim() : null;
+  };
+  const username = ask('Create admin', 'Username (letters, numbers, . _ -):');
+  if (username === null) return;
+  const name = ask('Create admin', 'Name shown on entries (e.g. Maharul):');
+  if (name === null) return;
+  const password = ask('Create admin', 'Password (at least 8 characters). It shows while you type, so make sure nobody is watching:');
+  if (password === null) return;
+  try {
+    ACTOR = { id: '', name: 'Sheet owner' };
+    withLock_(() => createUser_({ username: username, name: name, password: password }, { status: 'active', isAdmin: true }));
+    ui.alert('Admin "' + username.toLowerCase() + '" created. Sign in to the app with it.');
+  } catch (e) {
+    ui.alert(e.message);
   }
-  PropertiesService.getScriptProperties().setProperty('APP_PIN', pin);
-  CacheService.getScriptCache().remove('pinFails');
-  ui.alert('Password saved. Anyone signed in with the old password will need the new one.');
+}
+
+function resetPasswordFromSheet() {
+  const ui = SpreadsheetApp.getUi();
+  const u = ui.prompt('Reset password', 'Username:', ui.ButtonSet.OK_CANCEL);
+  if (u.getSelectedButton() !== ui.Button.OK) return;
+  const pw = ui.prompt('Reset password', 'New password (at least 8 characters):', ui.ButtonSet.OK_CANCEL);
+  if (pw.getSelectedButton() !== ui.Button.OK) return;
+  try {
+    ACTOR = { id: '', name: 'Sheet owner' };
+    const user = readUsers_().find(x => x.username === u.getResponseText().trim().toLowerCase());
+    if (!user) throw new Error('No user with that username.');
+    withLock_(() => setPassword_(user, pw.getResponseText()));
+    ui.alert('Password changed. That user is now signed out on every device.');
+  } catch (e) {
+    ui.alert(e.message);
+  }
 }
 
 // ───────────────────────────── Web API ─────────────────────────────
 
 const API = {
-  ping: () => ({ settings: readSettings_() }),
+  ping: () => ({ app: 'M&M Car Clinic API' }),
+  login: req => login_(req),
+  signup: req => signup_(req),
+  me: (req, user) => ({ user: me_(user) }),
+  logout: req => logout_(req.token),
+  changePassword: (req, user) => changePassword_(user, req),
+  users: () => readUsers_().map(publicUser_),
+  updateUser: (req, user) => updateUser_(user, req.user),
+  resetPassword: req => {
+    const u = readUsers_().find(x => x.id === str_(req.id, 64));
+    if (!u) throw new Error('User not found.');
+    setPassword_(u, req.password);
+    return { ok: true };
+  },
+  changeLog: req => changeLog_(req),
+  history: (req, user) => history_(user, req),
   meta: () => ({ settings: readSettings_(), categories: readCategories_() }),
   range: req => range_(req.from, req.to),
   addTxn: req => saveTxn_(req.txn, false),
   updateTxn: req => saveTxn_(req.txn, true),
-  deleteTxn: req => deleteRowById_(TABS.TXN, req.id),
+  deleteTxn: req => deleteTxn_(req.id),
   saveSettings: req => saveSettings_(req.settings),
   saveCategories: req => saveCategories_(req.categories),
   inventory: () => inventory_(),
@@ -119,16 +173,36 @@ const API = {
   addMove: req => addMove_(req),
   moves: req => moves_(req.itemId),
   deleteMove: req => deleteMove_(req.id),
-  employees: () => employees_(),
+  employees: (req, user) => employees_().map(e => hideSalary_(user, e)),
   saveEmployee: req => saveEmployee_(req.employee),
   deleteEmployee: req => deleteEmployee_(req.id),
-  salaryMonth: req => salaryMonth_(req.month),
+  salaryMonth: (req, user) => salaryMonth_(req.month, user),
   saveAttendance: req => saveAttendance_(req.records),
   addSalaryPayment: req => addSalaryPayment_(req),
   deleteSalaryPayment: req => deleteSalaryPayment_(req.id),
 };
 const WRITES = ['addTxn', 'updateTxn', 'deleteTxn', 'saveSettings', 'saveCategories', 'saveItem', 'deleteItem', 'addMove', 'deleteMove',
-  'saveEmployee', 'deleteEmployee', 'saveAttendance', 'addSalaryPayment', 'deleteSalaryPayment'];
+  'saveEmployee', 'deleteEmployee', 'saveAttendance', 'addSalaryPayment', 'deleteSalaryPayment',
+  'signup', 'changePassword', 'updateUser', 'resetPassword'];
+
+// Actions anyone can call without signing in.
+const PUBLIC = ['ping', 'login', 'signup'];
+// What each action needs: [sections (any one is enough), level]. 'any' = any signed-in user; 'admin' = admins only.
+// Anything not listed here is refused.
+const RULES = {
+  me: 'any', logout: 'any', changePassword: 'any', meta: 'any', history: 'any',
+  users: 'admin', updateUser: 'admin', resetPassword: 'admin', changeLog: 'admin',
+  range: [['cash', 'report'], 'view'],
+  addTxn: [['cash'], 'edit'], updateTxn: [['cash'], 'edit'], deleteTxn: [['cash'], 'edit'],
+  saveSettings: [['settings'], 'edit'], saveCategories: [['settings'], 'edit'],
+  inventory: [['inventory'], 'view'], moves: [['inventory'], 'view'],
+  saveItem: [['inventory'], 'edit'], deleteItem: [['inventory'], 'edit'], addMove: [['inventory'], 'edit'], deleteMove: [['inventory'], 'edit'],
+  employees: [['employees', 'attendance', 'salary'], 'view'],
+  saveEmployee: [['employees'], 'edit'], deleteEmployee: [['employees'], 'edit'],
+  salaryMonth: [['attendance', 'salary'], 'view'],
+  saveAttendance: [['attendance'], 'edit'],
+  addSalaryPayment: [['salary'], 'edit'], deleteSalaryPayment: [['salary'], 'edit'],
+};
 
 function doGet() {
   return json_({ ok: true, data: { app: 'M&M Car Clinic API' } });
@@ -137,26 +211,336 @@ function doGet() {
 function doPost(e) {
   try {
     const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-    checkPin_(req.pin);
     const fn = API[req.action];
     if (!fn) throw new Error('Unknown action: ' + req.action);
-    const data = WRITES.indexOf(req.action) >= 0 ? withLock_(() => fn(req)) : fn(req);
+    let user = null;
+    if (PUBLIC.indexOf(req.action) < 0) {
+      user = session_(req.token);
+      authorize_(user, req.action, req);
+      ACTOR = { id: user.id, name: user.name || user.username };
+    }
+    const data = WRITES.indexOf(req.action) >= 0 ? withLock_(() => fn(req, user)) : fn(req, user);
     return json_({ ok: true, data: data });
   } catch (err) {
     return json_({ ok: false, error: err.message, code: err.code || '' });
   }
 }
 
-function checkPin_(pin) {
-  const expected = PropertiesService.getScriptProperties().getProperty('APP_PIN');
-  if (!expected) throw codeError_('No password has been set yet. In the Google Sheet, use M&M App → Set app password.', 'AUTH');
-  const cache = CacheService.getScriptCache();
-  const fails = Number(cache.get('pinFails') || 0);
-  if (fails >= 10) throw codeError_('Too many wrong password attempts. Try again in 15 minutes.', 'AUTH');
-  if (String(pin || '') !== expected) {
-    cache.put('pinFails', String(fails + 1), 900);
-    throw codeError_('Wrong password.', 'AUTH');
+// ───────────────────────────── Users, sign-in & permissions ─────────────────────────────
+
+function cleanUser_(r) {
+  let perms = {};
+  try { perms = JSON.parse(String(r.perms || '{}')) || {}; } catch (e) { perms = {}; }
+  return {
+    _row: r._row,
+    id: String(r.id),
+    username: String(r.username).toLowerCase(),
+    name: String(r.name),
+    passHash: String(r.passHash),
+    status: String(r.status || 'pending'),
+    isAdmin: r.isAdmin === true || String(r.isAdmin).toUpperCase() === 'TRUE',
+    perms: perms,
+    createdAt: String(r.createdAt),
+    approvedBy: String(r.approvedBy),
+    lastLogin: String(r.lastLogin),
+    sessionsFrom: Number(r.sessionsFrom) || 0, // sessions started at or before this time (ms) are invalid
+  };
+}
+
+function readUsers_() {
+  return readRows_(TABS.USER).map(cleanUser_);
+}
+
+/** Each section's level for this user; admins can do everything. */
+function permsFor_(u) {
+  const out = {};
+  SECTIONS.forEach(sec => {
+    const lvl = u.isAdmin ? 'edit' : String(u.perms[sec] || 'none');
+    out[sec] = LEVELS.indexOf(lvl) >= 0 ? lvl : 'none';
+  });
+  return out;
+}
+
+function can_(u, sections, level) {
+  const p = permsFor_(u);
+  return sections.some(sec => LEVELS.indexOf(p[sec]) >= LEVELS.indexOf(level));
+}
+
+function me_(u) {
+  return { id: u.id, username: u.username, name: u.name, isAdmin: u.isAdmin, perms: permsFor_(u) };
+}
+
+function publicUser_(u) {
+  return {
+    id: u.id, username: u.username, name: u.name, status: u.status, isAdmin: u.isAdmin, perms: permsFor_(u),
+    createdAt: u.createdAt, approvedBy: u.approvedBy, lastLogin: u.lastLogin,
+  };
+}
+
+function authorize_(user, action, req) {
+  const rule = RULES[action];
+  const deny = () => { throw codeError_('You don\'t have access to do that. Ask the admin.', 'FORBIDDEN'); };
+  if (!rule) deny();
+  if (rule === 'any') return;
+  if (rule === 'admin') {
+    if (!user.isAdmin) deny();
+    return;
   }
+  if (!can_(user, rule[0], rule[1])) deny();
+  // Actions that also write a cash-book entry need cash-book edit access too.
+  if ((action === 'addMove' || action === 'addSalaryPayment') && req.cash && !can_(user, ['cash'], 'edit')) deny();
+}
+
+/** Basic salary is visible only to people with salary or employee access. */
+function hideSalary_(user, e) {
+  if (can_(user, ['salary', 'employees'], 'view')) return e;
+  const copy = Object.assign({}, e);
+  delete copy.basicSalary;
+  return copy;
+}
+
+function hashPassword_(password, salt, rounds) {
+  const key = Utilities.newBlob(String(password)).getBytes();
+  let h = Utilities.computeHmacSha256Signature(Utilities.newBlob(salt).getBytes(), key);
+  for (let i = 1; i < rounds; i++) h = Utilities.computeHmacSha256Signature(h, key);
+  return Utilities.base64Encode(h);
+}
+
+function makeHash_(password) {
+  const salt = Utilities.getUuid();
+  return ['v1', HASH_ROUNDS, salt, hashPassword_(password, salt, HASH_ROUNDS)].join('$');
+}
+
+function verifyPassword_(password, stored) {
+  const parts = String(stored || '').split('$');
+  if (parts.length !== 4 || parts[0] !== 'v1') return false;
+  const a = hashPassword_(password, parts[2], Number(parts[1]) || HASH_ROUNDS);
+  const b = parts[3];
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+function checkNewPassword_(password) {
+  if (String(password || '').length < 8) throw new Error('The password must be at least 8 characters.');
+}
+
+function createUser_(x, opts) {
+  const username = str_(x.username, 30).toLowerCase();
+  const name = str_(x.name, 60);
+  if (!/^[a-z0-9._-]{3,30}$/.test(username)) throw new Error('Username must be 3–30 letters, numbers, dots, dashes or underscores.');
+  if (!name) throw new Error('Enter your name.');
+  checkNewPassword_(x.password);
+  if (readUsers_().some(u => u.username === username)) throw new Error('That username is taken. Choose another.');
+  const u = {
+    id: Utilities.getUuid(), username: username, name: name, passHash: makeHash_(x.password),
+    status: opts.status, isAdmin: !!opts.isAdmin, perms: '{}', createdAt: new Date(),
+    approvedBy: opts.status === 'active' ? actorName_() : '', lastLogin: '', sessionsFrom: 0,
+  };
+  sheet_(TABS.USER).appendRow(toRow_(TABS.USER, u));
+  audit_('add', 'Users', u.id, 'New user ' + username + (opts.status === 'pending' ? ' (waiting for approval)' : ''),
+    null, { username: username, name: name, status: u.status, isAdmin: u.isAdmin });
+  return u;
+}
+
+function signup_(req) {
+  const cache = CacheService.getScriptCache();
+  const n = Number(cache.get('signups') || 0);
+  if (n >= 20) throw new Error('Too many sign-up requests right now. Try again later.');
+  cache.put('signups', String(n + 1), 3600);
+  ACTOR = { id: '', name: str_(req.name, 60) || str_(req.username, 30) };
+  createUser_(req, { status: 'pending', isAdmin: false });
+  return { pending: true };
+}
+
+function login_(req) {
+  const username = str_(req.username, 30).toLowerCase();
+  const cache = CacheService.getScriptCache();
+  const failKey = 'fail:' + username;
+  const fails = Number(cache.get(failKey) || 0);
+  if (fails >= 5) throw codeError_('Too many wrong attempts for this username. Try again in 15 minutes.', 'LOGIN');
+  const u = readUsers_().find(x => x.username === username);
+  if (!u || !verifyPassword_(req.password, u.passHash)) {
+    cache.put(failKey, String(fails + 1), 900);
+    throw codeError_('Wrong username or password.', 'LOGIN');
+  }
+  cache.remove(failKey);
+  if (u.status === 'pending') throw codeError_('Your account is waiting for the admin to approve it.', 'LOGIN');
+  if (u.status !== 'active') throw codeError_('This account is disabled. Ask the admin.', 'LOGIN');
+  const token = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+  cache.put('sess:' + token, u.id + '|' + Date.now(), SESSION_TTL);
+  sheet_(TABS.USER).getRange(u._row, TABS.USER.headers.indexOf('lastLogin') + 1).setValue(new Date());
+  return { token: token, user: me_(u) };
+}
+
+function session_(token) {
+  const expired = () => codeError_('Please sign in again.', 'AUTH');
+  if (!token || !/^[a-f0-9]{64}$/.test(String(token))) throw expired();
+  const cache = CacheService.getScriptCache();
+  const v = cache.get('sess:' + token);
+  if (!v) throw expired();
+  const parts = v.split('|');
+  const u = readUsers_().find(x => x.id === parts[0]);
+  const issued = Number(parts[1]) || 0;
+  if (!u || u.status !== 'active' || issued <= u.sessionsFrom) {
+    cache.remove('sess:' + token);
+    throw expired();
+  }
+  cache.put('sess:' + token, v, SESSION_TTL); // sliding expiry
+  return u;
+}
+
+function logout_(token) {
+  if (token) CacheService.getScriptCache().remove('sess:' + token);
+  return { ok: true };
+}
+
+/** Changes a password and signs that user out on every device. */
+function setPassword_(u, password) {
+  checkNewPassword_(password);
+  const sh = sheet_(TABS.USER);
+  sh.getRange(u._row, TABS.USER.headers.indexOf('passHash') + 1).setValue(safe_(makeHash_(password), 'passHash'));
+  sh.getRange(u._row, TABS.USER.headers.indexOf('sessionsFrom') + 1).setValue(Date.now());
+  audit_('edit', 'Users', u.id, 'Password changed for ' + u.username, null, null);
+}
+
+function changePassword_(user, req) {
+  if (!verifyPassword_(req.oldPassword, user.passHash)) throw new Error('Your current password is wrong.');
+  setPassword_(user, req.newPassword);
+  return { ok: true };
+}
+
+function updateUser_(admin, x) {
+  x = x || {};
+  const users = readUsers_();
+  const u = users.find(r => r.id === str_(x.id, 64));
+  if (!u) throw new Error('User not found.');
+  const before = publicUser_(u);
+  const next = {
+    name: x.name !== undefined ? str_(x.name, 60) || u.name : u.name,
+    status: ['pending', 'active', 'disabled'].indexOf(x.status) >= 0 ? x.status : u.status,
+    isAdmin: x.isAdmin !== undefined ? !!x.isAdmin : u.isAdmin,
+    perms: u.perms,
+  };
+  if (x.perms) {
+    next.perms = {};
+    SECTIONS.forEach(sec => { next.perms[sec] = LEVELS.indexOf(x.perms[sec]) >= 0 ? x.perms[sec] : 'none'; });
+  }
+  if (u.id === admin.id && (next.status !== 'active' || !next.isAdmin)) {
+    throw new Error('You can\'t disable yourself or remove your own admin rights.');
+  }
+  const otherAdmins = users.filter(r => r.status === 'active' && r.isAdmin && r.id !== u.id).length;
+  if (u.isAdmin && u.status === 'active' && (!next.isAdmin || next.status !== 'active') && otherAdmins === 0) {
+    throw new Error('Keep at least one active admin.');
+  }
+  const sh = sheet_(TABS.USER);
+  const H = TABS.USER.headers;
+  const set = (field, value) => sh.getRange(u._row, H.indexOf(field) + 1).setValue(safe_(value, field));
+  set('name', next.name);
+  set('status', next.status);
+  set('isAdmin', next.isAdmin);
+  set('perms', JSON.stringify(next.perms));
+  if (u.status !== 'active' && next.status === 'active' && !u.approvedBy) set('approvedBy', actorName_());
+  if (next.status !== 'active') set('sessionsFrom', Date.now());
+  const after = publicUser_(Object.assign({}, u, next));
+  const summary = before.status !== after.status
+    ? { active: 'Approved ', disabled: 'Disabled ', pending: 'Set to pending: ' }[after.status] + u.username
+    : 'Changed access for ' + u.username;
+  audit_('edit', 'Users', u.id, summary, before, after);
+  return after;
+}
+
+// ───────────────────────────── Change log ─────────────────────────────
+
+const ENTITY_SECTION = {
+  Transactions: 'cash', Inventory: 'inventory', StockMoves: 'inventory', Employees: 'employees',
+  Attendance: 'attendance', SalaryPayments: 'salary', Settings: 'settings', Categories: 'settings', Users: 'admin',
+};
+// Bookkeeping fields left out of the before/after snapshots.
+const AUDIT_SKIP = ['_row', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy', 'passHash', 'sessionsFrom', 'source', 'lastLogin'];
+
+function snapshot_(o) {
+  if (!o) return null;
+  if (Array.isArray(o)) return o;
+  const out = {};
+  Object.keys(o).forEach(k => { if (AUDIT_SKIP.indexOf(k) < 0) out[k] = o[k] instanceof Date ? cell_(o[k], tz_()) : o[k]; });
+  return out;
+}
+
+function actorName_() {
+  return ACTOR ? ACTOR.name : 'Sheet owner';
+}
+
+/** Appends one line to the ChangeLog tab: who did what to which record, with old and new values. */
+function audit_(action, entity, recordId, summary, before, after) {
+  const j = v => (v ? JSON.stringify(snapshot_(v)).slice(0, 45000) : '');
+  sheet_(TABS.AUDIT).appendRow(toRow_(TABS.AUDIT, {
+    id: Utilities.getUuid(), at: new Date(), user: actorName_(), action: action, entity: entity,
+    recordId: String(recordId || ''), summary: str_(summary, 300), before: j(before), after: j(after),
+  }));
+}
+
+function cleanAudit_(r) {
+  const parse = v => {
+    try { return v ? JSON.parse(String(v)) : null; } catch (e) { return null; }
+  };
+  return {
+    id: String(r.id), at: String(r.at), user: String(r.user), action: String(r.action), entity: String(r.entity),
+    recordId: String(r.recordId), summary: String(r.summary), before: parse(r.before), after: parse(r.after),
+  };
+}
+
+/** Every logged change to one record, newest first. */
+function history_(user, req) {
+  const entity = str_(req.entity, 40);
+  const id = str_(req.id, 100);
+  const section = ENTITY_SECTION[entity];
+  if (!section || !id) throw new Error('Unknown record.');
+  if (section === 'admin' ? !user.isAdmin : !can_(user, [section], 'view')) {
+    throw codeError_('You don\'t have access to that history.', 'FORBIDDEN');
+  }
+  const sh = sheet_(TABS.AUDIT);
+  const n = sh.getLastRow() - 1;
+  if (n < 1) return [];
+  const col = TABS.AUDIT.headers.indexOf('recordId') + 1;
+  // Rows are appended in order, so a later row is a later change (timestamps only have one-second precision).
+  return sh.getRange(2, col, n, 1).createTextFinder(id).matchEntireCell(true).findAll()
+    .map(c => c.getRow())
+    .sort((a, b) => b - a)
+    .map(row => cleanAudit_(readRow_(TABS.AUDIT, row)))
+    .filter(a => a.entity === entity);
+}
+
+/**
+ * Recent changes for the admin's Activity screen, newest first, up to 100 at a time.
+ * Scans at most 500 rows per call; `before` (a row number) continues from where the last page stopped.
+ */
+function changeLog_(req) {
+  const sh = sheet_(TABS.AUDIT);
+  const last = sh.getLastRow();
+  const end = Math.min(Number(req.before) || last + 1, last + 1) - 1;
+  if (end < 2) return { rows: [], before: 0 };
+  const start = Math.max(2, end - 499);
+  const values = sh.getRange(start, 1, end - start + 1, TABS.AUDIT.headers.length).getValues();
+  const tz = tz_();
+  const userQ = str_(req.user, 60).toLowerCase();
+  const entityQ = str_(req.entity, 40);
+  const rows = [];
+  let stoppedAt = start;
+  for (let i = values.length - 1; i >= 0; i--) {
+    if (rows.length === 100) {
+      stoppedAt = start + i + 1;
+      break;
+    }
+    const o = {};
+    TABS.AUDIT.headers.forEach((h, j) => { o[h] = cell_(values[i][j], tz); });
+    if (userQ && String(o.user).toLowerCase() !== userQ) continue;
+    if (entityQ && o.entity !== entityQ) continue;
+    rows.push(cleanAudit_(o));
+  }
+  const more = rows.length === 100 ? stoppedAt : start;
+  return { rows: rows, before: more > 2 ? more : 0 };
 }
 
 // ───────────────────────────── Cash book ─────────────────────────────
@@ -225,16 +609,35 @@ function saveTxn_(input, isUpdate) {
     const old = readRow_(TABS.TXN, row);
     t.source = old.source;
     t.createdAt = old.createdAt;
+    t.createdBy = old.createdBy;
     t.updatedAt = now;
+    t.updatedBy = actorName_();
     sh.getRange(row, 1, 1, TABS.TXN.headers.length).setValues([toRow_(TABS.TXN, t)]);
+    audit_('edit', 'Transactions', t.id, txnLabel_(t), cleanTxn_(old), t);
   } else {
     t.id = Utilities.getUuid();
     t.source = 'app';
     t.createdAt = now;
     t.updatedAt = now;
+    t.createdBy = actorName_();
+    t.updatedBy = '';
     sh.appendRow(toRow_(TABS.TXN, t));
+    audit_('add', 'Transactions', t.id, txnLabel_(t), null, t);
   }
   return { id: t.id };
+}
+
+function txnLabel_(t) {
+  const kind = { IN: 'Cash in', OUT: 'Cash out', TRANSFER: 'Transfer' }[t.type] || t.type;
+  return kind + ': ' + t.description + ' ৳' + t.amount + ' (' + t.date + ')';
+}
+
+function deleteTxn_(id) {
+  const row = findRow_(TABS.TXN, id);
+  const old = cleanTxn_(readRow_(TABS.TXN, row));
+  sheet_(TABS.TXN).deleteRow(row);
+  audit_('delete', 'Transactions', id, txnLabel_(old), old, null);
+  return { deleted: true };
 }
 
 function cleanTxn_(r) {
@@ -251,6 +654,9 @@ function cleanTxn_(r) {
     note: String(r.note),
     source: String(r.source),
     createdAt: String(r.createdAt),
+    updatedAt: String(r.updatedAt),
+    createdBy: String(r.createdBy || ''),
+    updatedBy: String(r.updatedBy || ''),
   };
 }
 
@@ -267,6 +673,7 @@ function readSettings_() {
 
 function saveSettings_(input) {
   input = input || {};
+  const beforeAll = readSettings_();
   const sh = sheet_(TABS.SET);
   const at = {};
   readRows_(TABS.SET).forEach(r => { at[String(r.key)] = r._row; });
@@ -294,7 +701,16 @@ function saveSettings_(input) {
       at[key] = sh.getLastRow();
     }
   });
-  return readSettings_();
+  const afterAll = readSettings_();
+  const before = {}, after = {};
+  Object.keys(input).forEach(k => {
+    if (SETTING_KEYS.test(k) && String(beforeAll[k]) !== String(afterAll[k])) {
+      before[k] = beforeAll[k];
+      after[k] = afterAll[k];
+    }
+  });
+  if (Object.keys(after).length) audit_('edit', 'Settings', 'settings', 'Settings changed: ' + Object.keys(after).join(', '), before, after);
+  return afterAll;
 }
 
 function readCategories_() {
@@ -323,11 +739,14 @@ function saveCategories_(input) {
   if (!rows.some(r => r[0] === 'IN') || !rows.some(r => r[0] === 'OUT')) {
     throw new Error('Keep at least one cash-in and one cash-out category.');
   }
+  const before = readCategories_();
   const sh = sheet_(TABS.CAT);
   const last = sh.getLastRow();
   if (last > 1) sh.getRange(2, 1, last - 1, 2).clearContent();
   sh.getRange(2, 1, rows.length, 2).setValues(rows);
-  return readCategories_();
+  const after = readCategories_();
+  audit_('edit', 'Categories', 'categories', 'Categories changed', before, after);
+  return after;
 }
 
 // ───────────────────────────── Inventory ─────────────────────────────
@@ -343,6 +762,9 @@ function cleanItem_(r) {
     salePrice: Number(r.salePrice) || 0,
     reorderLevel: Number(r.reorderLevel) || 0,
     active: r.active !== false && String(r.active).toUpperCase() !== 'FALSE',
+    createdBy: String(r.createdBy || ''),
+    updatedBy: String(r.updatedBy || ''),
+    updatedAt: String(r.updatedAt || ''),
   };
 }
 
@@ -381,16 +803,27 @@ function saveItem_(x, openingQty) {
   const now = new Date();
   if (it.id) {
     const row = findRow_(TABS.ITEM, it.id);
-    it.createdAt = readRow_(TABS.ITEM, row).createdAt;
+    const old = readRow_(TABS.ITEM, row);
+    it.createdAt = old.createdAt;
+    it.createdBy = old.createdBy;
     it.updatedAt = now;
+    it.updatedBy = actorName_();
     sh.getRange(row, 1, 1, TABS.ITEM.headers.length).setValues([toRow_(TABS.ITEM, it)]);
+    audit_('edit', 'Inventory', it.id, 'Item: ' + it.name, cleanItem_(old), it);
   } else {
     it.id = Utilities.getUuid();
     it.createdAt = now;
     it.updatedAt = now;
+    it.createdBy = actorName_();
+    it.updatedBy = '';
     sh.appendRow(toRow_(TABS.ITEM, it));
+    audit_('add', 'Inventory', it.id, 'Item: ' + it.name, null, it);
     const q = num_(openingQty);
-    if (q) appendMove_({ date: today_(), itemId: it.id, type: 'ADJUST', qty: q, unitPrice: it.costPrice, reference: '', note: 'Opening stock', txnId: '' });
+    if (q) {
+      const mv = { date: today_(), itemId: it.id, type: 'ADJUST', qty: q, unitPrice: it.costPrice, reference: '', note: 'Opening stock', txnId: '' };
+      appendMove_(mv);
+      audit_('add', 'StockMoves', mv.id, 'Opening stock: ' + it.name + ' ' + q, null, mv);
+    }
   }
   return cleanItem_(it);
 }
@@ -398,12 +831,15 @@ function saveItem_(x, openingQty) {
 function deleteItem_(id) {
   const row = findRow_(TABS.ITEM, id);
   const used = readRows_(TABS.MOVE).some(m => String(m.itemId) === String(id));
+  const old = cleanItem_(readRow_(TABS.ITEM, row));
   if (used) {
     // Keep the history: archive instead of deleting.
     sheet_(TABS.ITEM).getRange(row, TABS.ITEM.headers.indexOf('active') + 1).setValue(false);
+    audit_('edit', 'Inventory', id, 'Archived item: ' + old.name, old, Object.assign({}, old, { active: false }));
     return { archived: true };
   }
   sheet_(TABS.ITEM).deleteRow(row);
+  audit_('delete', 'Inventory', id, 'Deleted item: ' + old.name, old, null);
   return { deleted: true };
 }
 
@@ -440,12 +876,22 @@ function addMove_(req) {
     }, false);
     m.txnId = txn.id;
   }
-  return appendMove_(m);
+  const res = appendMove_(m);
+  audit_('add', 'StockMoves', m.id, moveLabel_(m, item), null, m);
+  // Also file it under the item, so the item's history shows its stock movements.
+  audit_('add', 'Inventory', item.id, moveLabel_(m, item), null, m);
+  return res;
+}
+
+function moveLabel_(m, item) {
+  const kind = { IN: 'Stock in', OUT: 'Stock out', ADJUST: 'Adjustment' }[m.type] || m.type;
+  return kind + ': ' + item.name + ' ' + m.qty + ' ' + item.unit + ' (' + m.date + ')';
 }
 
 function appendMove_(m) {
   m.id = Utilities.getUuid();
   m.createdAt = new Date();
+  m.createdBy = actorName_();
   sheet_(TABS.MOVE).appendRow(toRow_(TABS.MOVE, m));
   return { id: m.id, txnId: m.txnId };
 }
@@ -464,16 +910,23 @@ function moves_(itemId) {
       note: String(m.note),
       txnId: String(m.txnId),
       createdAt: String(m.createdAt),
+      createdBy: String(m.createdBy || ''),
     }))
     .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
 }
 
 function deleteMove_(id) {
   const row = findRow_(TABS.MOVE, id);
-  const txnId = String(readRow_(TABS.MOVE, row).txnId || '');
+  const old = readRow_(TABS.MOVE, row);
+  const txnId = String(old.txnId || '');
+  let item = { id: String(old.itemId), name: 'item', unit: '' };
+  try { item = cleanItem_(readRow_(TABS.ITEM, findRow_(TABS.ITEM, old.itemId))); } catch (e) { /* item gone */ }
   sheet_(TABS.MOVE).deleteRow(row);
+  const label = 'Deleted ' + moveLabel_(Object.assign({}, old, { type: String(old.type).toUpperCase() }), item).toLowerCase();
+  audit_('delete', 'StockMoves', id, label, old, null);
+  audit_('delete', 'Inventory', item.id, label, old, null);
   if (txnId) {
-    try { deleteRowById_(TABS.TXN, txnId); } catch (e) { /* cash entry was already deleted */ }
+    try { deleteTxn_(txnId); } catch (e) { /* cash entry was already deleted */ }
   }
   return { deleted: true };
 }
@@ -492,6 +945,8 @@ function cleanEmp_(r) {
     trackAttendance: flag(r.trackAttendance),
     active: flag(r.active),
     sortOrder: Number(r.sortOrder) || 0,
+    updatedBy: String(r.updatedBy || ''),
+    updatedAt: String(r.updatedAt || ''),
   };
 }
 
@@ -516,6 +971,7 @@ function saveEmployee_(x) {
   if (e.joinDate && !isDate_(e.joinDate)) throw new Error('Invalid joining date.');
   const sh = sheet_(TABS.EMP);
   const now = new Date();
+  e.updatedBy = actorName_();
   if (e.id) {
     const row = findRow_(TABS.EMP, e.id);
     const old = readRow_(TABS.EMP, row);
@@ -523,12 +979,16 @@ function saveEmployee_(x) {
     e.createdAt = old.createdAt;
     e.updatedAt = now;
     sh.getRange(row, 1, 1, TABS.EMP.headers.length).setValues([toRow_(TABS.EMP, e)]);
+    const o = cleanEmp_(old);
+    const summary = o.active && !e.active ? 'Removed employee: ' : !o.active && e.active ? 'Restored employee: ' : 'Employee: ';
+    audit_('edit', 'Employees', e.id, summary + e.name, o, e);
   } else {
     e.id = Utilities.getUuid();
     e.sortOrder = employees_().reduce((m, r) => Math.max(m, r.sortOrder), 0) + 1;
     e.createdAt = now;
     e.updatedAt = now;
     sh.appendRow(toRow_(TABS.EMP, e));
+    audit_('add', 'Employees', e.id, 'New employee: ' + e.name, null, e);
   }
   return cleanEmp_(e);
 }
@@ -537,24 +997,31 @@ function deleteEmployee_(id) {
   const row = findRow_(TABS.EMP, id);
   const used = readRows_(TABS.ATT).some(a => String(a.employeeId) === String(id) && a.status) ||
     readRows_(TABS.PAY).some(p => String(p.employeeId) === String(id));
+  const old = cleanEmp_(readRow_(TABS.EMP, row));
   if (used) {
     // Keep attendance and payment history: archive instead of deleting.
     sheet_(TABS.EMP).getRange(row, TABS.EMP.headers.indexOf('active') + 1).setValue(false);
+    audit_('edit', 'Employees', id, 'Removed employee: ' + old.name, old, Object.assign({}, old, { active: false }));
     return { archived: true };
   }
   sheet_(TABS.EMP).deleteRow(row);
+  audit_('delete', 'Employees', id, 'Deleted employee: ' + old.name, old, null);
   return { deleted: true };
 }
 
-function salaryMonth_(month) {
+function salaryMonth_(month, user) {
   if (!/^\d{4}-\d{2}$/.test(String(month || ''))) throw new Error('Invalid month.');
+  const seesPay = !user || can_(user, ['salary'], 'view');
   return {
     month: month,
-    employees: employees_(),
+    employees: employees_().map(e => (user ? hideSalary_(user, e) : e)),
     attendance: readRows_(TABS.ATT)
       .filter(a => String(a.date).slice(0, 7) === month && a.status)
-      .map(a => ({ date: String(a.date).slice(0, 10), employeeId: String(a.employeeId), status: String(a.status), note: String(a.note) })),
-    payments: readRows_(TABS.PAY)
+      .map(a => ({
+        date: String(a.date).slice(0, 10), employeeId: String(a.employeeId), status: String(a.status), note: String(a.note),
+        updatedBy: String(a.updatedBy || ''), updatedAt: String(a.updatedAt || ''),
+      })),
+    payments: !seesPay ? [] : readRows_(TABS.PAY)
       .filter(p => String(p.month) === month)
       .map(cleanPay_)
       .sort((a, b) => a.date.localeCompare(b.date)),
@@ -566,13 +1033,23 @@ function saveAttendance_(records) {
   if (records.length > 3000) throw new Error('Too many changes at once. Save in smaller batches.');
   const ids = {};
   employees_().forEach(e => { ids[e.id] = true; });
+  const names = {};
+  employees_().forEach(e => { names[e.id] = e.name; });
   const sh = sheet_(TABS.ATT);
   const at = {};
-  readRows_(TABS.ATT).forEach(r => { at[String(r.key)] = r._row; });
+  const was = {};
+  readRows_(TABS.ATT).forEach(r => {
+    at[String(r.key)] = r._row;
+    was[String(r.key)] = String(r.status || '');
+  });
   const now = new Date();
   const appends = [];
+  const changes = {};
   records.forEach(x => {
-    const a = { date: str_(x.date, 10), employeeId: str_(x.employeeId, 64), status: str_(x.status, 1).toUpperCase(), note: str_(x.note, 200), updatedAt: now };
+    const a = {
+      date: str_(x.date, 10), employeeId: str_(x.employeeId, 64), status: str_(x.status, 1).toUpperCase(), note: str_(x.note, 200),
+      updatedAt: now, updatedBy: actorName_(),
+    };
     if (!isDate_(a.date)) throw new Error('Invalid attendance date.');
     if (!ids[a.employeeId]) throw new Error('Unknown employee in attendance.');
     if (ATT_STATUSES.indexOf(a.status) < 0) throw new Error('Unknown attendance status: ' + a.status);
@@ -580,8 +1057,18 @@ function saveAttendance_(records) {
     const row = toRow_(TABS.ATT, a);
     if (at[a.key]) sh.getRange(at[a.key], 1, 1, row.length).setValues([row]);
     else if (a.status) appends.push(row);
+    const from = was[a.key] || '';
+    if (from !== a.status) {
+      const month = a.date.slice(0, 7);
+      (changes[month] = changes[month] || []).push({ date: a.date, employee: names[a.employeeId] || a.employeeId, from: from, to: a.status });
+    }
   });
   if (appends.length) sh.getRange(sh.getLastRow() + 1, 1, appends.length, appends[0].length).setValues(appends);
+  // One log line per month saved, listing every changed day (filed under the month, e.g. "2026-10").
+  Object.keys(changes).forEach(month => {
+    const list = changes[month];
+    audit_('edit', 'Attendance', month, list.length + ' attendance change' + (list.length === 1 ? '' : 's') + ' for ' + month, null, list);
+  });
   return { saved: records.length };
 }
 
@@ -597,6 +1084,7 @@ function cleanPay_(p) {
     note: String(p.note),
     txnId: String(p.txnId),
     source: String(p.source),
+    createdBy: String(p.createdBy || ''),
   };
 }
 
@@ -637,17 +1125,26 @@ function addSalaryPayment_(req) {
   }
   p.id = Utilities.getUuid();
   p.createdAt = new Date();
+  p.createdBy = actorName_();
   sheet_(TABS.PAY).appendRow(toRow_(TABS.PAY, p));
+  audit_('add', 'SalaryPayments', p.id, payLabel_(p, emp.name), null, Object.assign({ employee: emp.name }, p));
   return { id: p.id, txnId: p.txnId };
+}
+
+function payLabel_(p, name) {
+  return (p.type === 'ADVANCE' ? 'Advance' : 'Salary') + ' to ' + name + ' ৳' + p.amount + ' for ' + p.month;
 }
 const MONTHS_ = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
 function deleteSalaryPayment_(id) {
   const row = findRow_(TABS.PAY, id);
-  const txnId = String(readRow_(TABS.PAY, row).txnId || '');
+  const old = cleanPay_(readRow_(TABS.PAY, row));
+  let name = old.employeeId;
+  try { name = cleanEmp_(readRow_(TABS.EMP, findRow_(TABS.EMP, old.employeeId))).name; } catch (e) { /* employee gone */ }
   sheet_(TABS.PAY).deleteRow(row);
-  if (txnId) {
-    try { deleteRowById_(TABS.TXN, txnId); } catch (e) { /* cash entry was already deleted */ }
+  audit_('delete', 'SalaryPayments', id, 'Deleted ' + payLabel_(old, name).toLowerCase(), Object.assign({ employee: name }, old), null);
+  if (old.txnId) {
+    try { deleteTxn_(old.txnId); } catch (e) { /* cash entry was already deleted */ }
   }
   return { deleted: true };
 }
@@ -705,6 +1202,7 @@ function importSalarySheet() {
     ui.ButtonSet.YES_NO);
   if (ok !== ui.Button.YES) return;
 
+  ACTOR = { id: '', name: 'Salary sheet import' };
   withLock_(() => {
     const byName = {};
     employees_().forEach(e => { byName[e.name.toLowerCase()] = e; });
@@ -736,6 +1234,7 @@ function importSalarySheet() {
     const n = sh.getLastRow();
     if (n > 1) sh.getRange(2, 1, n - 1, H.length).clearContent();
     if (payRows.length) sh.getRange(2, 1, payRows.length, H.length).setValues(payRows.map(p => toRow_(TABS.PAY, p)));
+    audit_('add', 'SalaryPayments', 'import-' + month, 'Imported ' + people.length + ' employees and their advances for ' + month, null, null);
   });
   ui.alert('Imported ' + people.length + ' employees.');
 }
@@ -815,7 +1314,7 @@ function importLegacySheets() {
       txns.push({
         id: Utilities.getUuid(), date: d.date, type: type, invoice: String(r[c]).trim(), description: desc || '(no description)',
         category: categoryOf(desc, type), amount: amount, method: method, toMethod: '', note: '',
-        source: 'legacy:' + d.sheet, createdAt: now, updatedAt: now,
+        source: 'legacy:' + d.sheet, createdAt: now, updatedAt: now, createdBy: 'Old sheet import', updatedBy: '',
       });
     });
   }));
@@ -838,8 +1337,10 @@ function importLegacySheets() {
 
     const settings = { startDate: first, methods: s.methods };
     Object.keys(opening).forEach(m => { settings['opening_' + m] = opening[m]; });
+    ACTOR = { id: '', name: 'Old sheet import' };
     saveSettings_(settings);
     saveCategories_(cats);
+    audit_('add', 'Transactions', 'import', 'Imported ' + txns.length + ' entries from ' + days.length + ' old daily sheet(s), ' + first + ' to ' + last, null, null);
   });
   ui.alert('Imported ' + txns.length + ' entries from ' + days.length + ' sheet(s). Your old sheets were not changed.');
 }
